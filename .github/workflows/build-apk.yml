@@ -1,1 +1,285 @@
 
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK packages
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          if ! command -v sdkmanager >/dev/null 2>&1; then
+            export PATH="$PATH:$ANDROID_HOME/cmdline-tools/latest/bin"
+          fi
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Scaffold Android project
+        run: |
+          echo "=== Files in repo ==="
+          ls -la
+          HTML_FILE=""
+          for candidate in ./index.html ./*.html; do
+            if [ -f "$candidate" ] && grep -q 'id="lynxos-store-app"' "$candidate"; then
+              HTML_FILE="$candidate"
+              break
+            fi
+          done
+          if [ -z "$HTML_FILE" ]; then
+            echo "ERROR: no app HTML file found in the repository root."
+            echo "Upload the newest index.html (Add file > Upload files), then re-run this workflow."
+            exit 1
+          fi
+          echo "Using $HTML_FILE as the app page."
+
+          mkdir -p app/src/main/java/com/lynxos/store app/src/main/assets/www
+
+          cp "$HTML_FILE" app/src/main/assets/www/index.html
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "LynxosStore"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.9.1' apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.lynxos.store'
+              compileSdk 36
+              defaultConfig {
+                  applicationId 'com.lynxos.store'
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <!-- Lets the store see whether Justin's apps are installed (Android 11+). -->
+              <queries>
+                  <package android:name="com.workoutapp.app" />
+                  <package android:name="com.weatherapp.app" />
+                  <package android:name="com.rocknews.app" />
+                  <package android:name="com.metalradio.app" />
+                  <package android:name="com.lynxoshealth.app" />
+              </queries>
+              <application
+                  android:label="Lynxos Store"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity
+                      android:name="com.lynxos.store.MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/lynxos/store/MainActivity.java <<'EOF'
+          package com.lynxos.store;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.content.pm.PackageInfo;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          public class MainActivity extends Activity {
+              private WebView webView;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  webView = new WebView(this);
+                  webView.getSettings().setJavaScriptEnabled(true);
+                  webView.getSettings().setDomStorageEnabled(true);
+                  webView.getSettings().setAllowFileAccess(true);
+                  // http(s) links open in the system browser (handles APK downloads).
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          try {
+                              Uri uri = request.getUrl();
+                              String scheme = uri.getScheme();
+                              if (scheme != null && (scheme.equals("http") || scheme.equals("https"))) {
+                                  Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+                                  startActivity(intent);
+                                  return true;
+                              }
+                          } catch (Exception ignored) {}
+                          return false;
+                      }
+                  });
+                  // LynxosApps: lets the store see installed Lynxos apps and open them.
+                  webView.addJavascriptInterface(new Object() {
+                      @JavascriptInterface
+                      public String getInstalledVersion(String pkg) {
+                          try {
+                              PackageInfo pi = getPackageManager().getPackageInfo(pkg, 0);
+                              return "{\"versionName\":\"" + pi.versionName + "\",\"versionCode\":" + pi.versionCode + "}";
+                          } catch (Exception e) {
+                              return "null";
+                          }
+                      }
+                      @JavascriptInterface
+                      public boolean openApp(String pkg) {
+                          try {
+                              Intent intent = getPackageManager().getLaunchIntentForPackage(pkg);
+                              if (intent == null) return false;
+                              startActivity(intent);
+                              return true;
+                          } catch (Exception e) {
+                              return false;
+                          }
+                      }
+                  }, "LynxosApps");
+                  webView.addJavascriptInterface(new Object() {
+                      @JavascriptInterface
+                      public void exitApp() {
+                          try {
+                              MainActivity.this.runOnUiThread(new Runnable() {
+                                  @Override
+                                  public void run() {
+                                      try { MainActivity.this.finish(); } catch (Exception ignored) {}
+                                  }
+                              });
+                          } catch (Exception ignored) {}
+                      }
+                  }, "LynxosBack");
+                  if (savedInstanceState != null) {
+                      webView.restoreState(savedInstanceState);
+                  } else {
+                      webView.loadUrl("file:///android_asset/www/index.html");
+                  }
+                  setContentView(webView);
+              }
+
+              private void defaultBackPressed() {
+                  try {
+                      super.onBackPressed();
+                  } catch (Exception e) {
+                      try { finish(); } catch (Exception ignored) {}
+                  }
+              }
+
+              @Override
+              public void onBackPressed() {
+                  // Let the page handle back first; the page calls LynxosBack.exitApp()
+                  // when there is nowhere left to go.
+                  if (webView == null) {
+                      defaultBackPressed();
+                      return;
+                  }
+                  try {
+                      webView.evaluateJavascript(
+                          "(function(){try{return (typeof window.__lynxosOnBack==='function')?'1':'0';}catch(e){return '0';}})()",
+                          value -> {
+                              try {
+                                  if ("\"1\"".equals(value)) {
+                                      webView.evaluateJavascript("window.__lynxosOnBack()", null);
+                                  } else if (webView.canGoBack()) {
+                                      webView.goBack();
+                                  } else {
+                                      MainActivity.this.defaultBackPressed();
+                                  }
+                              } catch (Exception ignored) {
+                                  try { MainActivity.this.defaultBackPressed(); } catch (Exception ignored2) {}
+                              }
+                          });
+                  } catch (Exception e) {
+                      defaultBackPressed();
+                  }
+              }
+
+              @Override
+              protected void onSaveInstanceState(Bundle outState) {
+                  super.onSaveInstanceState(outState);
+                  try { if (webView != null) webView.saveState(outState); } catch (Exception ignored) {}
+              }
+          }
+          EOF
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+
+      - name: Build release APK (unsigned)
+        run: gradle :app:assembleRelease
+
+      - name: Sign release APK with the Lynxos key
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > /tmp/lynxos-release.p12
+          "$APKSIGNER" sign --ks /tmp/lynxos-release.p12 --ks-type PKCS12 \
+            --ks-pass:pass:"${{ secrets.KEYSTORE_PASSWORD }}" \
+            --key-pass:pass:"${{ secrets.KEY_PASSWORD }}" \
+            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
+            --out app/build/outputs/apk/release/app-release.apk \
+            app/build/outputs/apk/release/app-release-unsigned.apk
+          rm -f /tmp/lynxos-release.p12
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk | head -3
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: lynxos-store-apk
+          path: app/build/outputs/apk/release/app-release.apk
