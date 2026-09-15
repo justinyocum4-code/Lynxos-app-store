@@ -90,8 +90,8 @@ jobs:
                   applicationId 'com.lynxos.store'
                   minSdk 26
                   targetSdk 34
-                  versionCode 2
-                  versionName '1.1'
+                  versionCode 3
+                  versionName '1.1.1'
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -155,6 +155,7 @@ jobs:
           import android.app.Activity;
           import android.content.Intent;
           import android.content.pm.PackageInfo;
+          import android.content.pm.PackageManager;
           import android.net.Uri;
           import android.os.Build;
           import android.os.Bundle;
@@ -351,17 +352,24 @@ jobs:
                           });
                       }
                       @JavascriptInterface
-                      public void uninstallApp(final String pkg) {
-                          runOnUiThread(new Runnable() {
-                              @Override
-                              public void run() {
-                                  try {
-                                      Intent intent = new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + pkg));
-                                      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                                      startActivity(intent);
-                                  } catch (Exception ignored) {}
+                      public boolean uninstallApp(final String pkg) {
+                          try {
+                              Intent intent = new Intent(Intent.ACTION_UNINSTALL_PACKAGE, Uri.parse("package:" + pkg));
+                              if (intent.resolveActivity(getPackageManager(), PackageManager.MATCH_DEFAULT_ONLY) == null) {
+                                  intent = new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + pkg));
+                                  if (intent.resolveActivity(getPackageManager(), PackageManager.MATCH_DEFAULT_ONLY) == null) return false;
                               }
-                          });
+                              final Intent launch = intent;
+                              runOnUiThread(new Runnable() {
+                                  @Override
+                                  public void run() {
+                                      try { startActivity(launch); } catch (Exception ignored) {}
+                                  }
+                              });
+                              return true;
+                          } catch (Exception e) {
+                              return false;
+                          }
                       }
                   }, "LynxosInstaller");
                   webView.addJavascriptInterface(new Object() {
