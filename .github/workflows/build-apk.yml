@@ -355,9 +355,9 @@ jobs:
                       public boolean uninstallApp(final String pkg) {
                           try {
                               Intent intent = new Intent(Intent.ACTION_UNINSTALL_PACKAGE, Uri.parse("package:" + pkg));
-                              if (intent.resolveActivity(getPackageManager(), PackageManager.MATCH_DEFAULT_ONLY) == null) {
+                              if (intent.resolveActivity(getPackageManager()) == null) {
                                   intent = new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + pkg));
-                                  if (intent.resolveActivity(getPackageManager(), PackageManager.MATCH_DEFAULT_ONLY) == null) return false;
+                                  if (intent.resolveActivity(getPackageManager()) == null) return false;
                               }
                               final Intent launch = intent;
                               runOnUiThread(new Runnable() {
