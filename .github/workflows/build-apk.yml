@@ -90,8 +90,8 @@ jobs:
                   applicationId 'com.lynxos.store'
                   minSdk 26
                   targetSdk 34
-                  versionCode 3
-                  versionName '1.1.1'
+                  versionCode 4
+                  versionName '1.1.2'
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -109,6 +109,8 @@ jobs:
               <uses-permission android:name="android.permission.INTERNET" />
               <!-- Lets the store trigger the system install screen for downloaded APKs. -->
               <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+              <!-- Lets the store open the system uninstall screen (Android 8+ requires this). -->
+              <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
               <!-- Lets the store see whether Justin's apps are installed (Android 11+). -->
               <queries>
                   <package android:name="com.workoutapp.app" />
