@@ -90,13 +90,16 @@ jobs:
                   applicationId 'com.lynxos.store'
                   minSdk 26
                   targetSdk 34
-                  versionCode 1
-                  versionName '1.0'
+                  versionCode 2
+                  versionName '1.1'
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
+          }
+          dependencies {
+              implementation 'androidx.core:core:1.13.1'
           }
           EOF
 
@@ -104,6 +107,8 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
+              <!-- Lets the store trigger the system install screen for downloaded APKs. -->
+              <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
               <!-- Lets the store see whether Justin's apps are installed (Android 11+). -->
               <queries>
                   <package android:name="com.workoutapp.app" />
@@ -123,8 +128,25 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
+                  <provider
+                      android:name="androidx.core.content.FileProvider"
+                      android:authorities="com.lynxos.store.fileprovider"
+                      android:exported="false"
+                      android:grantUriPermissions="true">
+                      <meta-data
+                          android:name="android.support.FILE_PROVIDER_PATHS"
+                          android:resource="@xml/filepaths" />
+                  </provider>
               </application>
           </manifest>
+          EOF
+
+          mkdir -p app/src/main/res/xml
+          cat > app/src/main/res/xml/filepaths.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <external-files-path name="downloads" path="downloads/" />
+          </paths>
           EOF
 
           cat > app/src/main/java/com/lynxos/store/MainActivity.java <<'EOF'
@@ -134,14 +156,49 @@ jobs:
           import android.content.Intent;
           import android.content.pm.PackageInfo;
           import android.net.Uri;
+          import android.os.Build;
           import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.provider.Settings;
           import android.webkit.JavascriptInterface;
           import android.webkit.WebResourceRequest;
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
+          import androidx.core.content.FileProvider;
+          import java.io.File;
+          import java.io.FileOutputStream;
+          import java.io.InputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.util.concurrent.ConcurrentHashMap;
 
           public class MainActivity extends Activity {
               private WebView webView;
+              private final Handler mainHandler = new Handler(Looper.getMainLooper());
+              private final ConcurrentHashMap<String, Thread> downloads = new ConcurrentHashMap<>();
+
+              private void runJs(final String code) {
+                  mainHandler.post(new Runnable() {
+                      @Override
+                      public void run() {
+                          try {
+                              if (webView != null) webView.evaluateJavascript(code, null);
+                          } catch (Exception ignored) {}
+                      }
+                  });
+              }
+
+              private static String jsString(String s) {
+                  if (s == null) s = "";
+                  return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
+                                 .replace("\n", "\\n").replace("\r", "") + "\"";
+              }
+
+              private File downloadFile(String fileName) {
+                  File dir = new File(getExternalFilesDir(null), "downloads");
+                  return new File(dir, fileName);
+              }
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -150,7 +207,6 @@ jobs:
                   webView.getSettings().setJavaScriptEnabled(true);
                   webView.getSettings().setDomStorageEnabled(true);
                   webView.getSettings().setAllowFileAccess(true);
-                  // http(s) links open in the system browser (handles APK downloads).
                   webView.setWebViewClient(new WebViewClient() {
                       @Override
                       public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -189,6 +245,125 @@ jobs:
                           }
                       }
                   }, "LynxosApps");
+                  // LynxosInstaller: in-store APK downloads, installs and uninstalls.
+                  webView.addJavascriptInterface(new Object() {
+                      @JavascriptInterface
+                      public void startDownload(final String url, final String fileName) {
+                          try {
+                              if (fileName == null || fileName.isEmpty() || downloads.containsKey(fileName)) return;
+                              Thread t = new Thread(new Runnable() {
+                                  @Override
+                                  public void run() {
+                                      HttpURLConnection conn = null;
+                                      try {
+                                          File out = downloadFile(fileName);
+                                          File parent = out.getParentFile();
+                                          if (parent != null && !parent.exists()) parent.mkdirs();
+                                          conn = (HttpURLConnection) new URL(url).openConnection();
+                                          conn.setInstanceFollowRedirects(true);
+                                          conn.setConnectTimeout(25000);
+                                          conn.setReadTimeout(25000);
+                                          conn.setRequestProperty("User-Agent", "LynxosStore/1.1");
+                                          conn.setRequestProperty("Accept", "application/octet-stream");
+                                          conn.connect();
+                                          int total = conn.getContentLength();
+                                          InputStream in = conn.getInputStream();
+                                          FileOutputStream fos = new FileOutputStream(out);
+                                          byte[] buf = new byte[16384];
+                                          int n;
+                                          long done = 0;
+                                          int lastPct = -1;
+                                          while ((n = in.read(buf)) != -1) {
+                                              fos.write(buf, 0, n);
+                                              done += n;
+                                              if (total > 0) {
+                                                  int pct = (int) (done * 100L / total);
+                                                  if (pct != lastPct) {
+                                                      lastPct = pct;
+                                                      runJs("window.__lynxosDlProgress(" + jsString(fileName) + "," + pct + ")");
+                                                  }
+                                              }
+                                          }
+                                          fos.flush();
+                                          fos.close();
+                                          in.close();
+                                          runJs("window.__lynxosDlDone(" + jsString(fileName) + ")");
+                                      } catch (Exception e) {
+                                          String msg = e.getMessage();
+                                          if (msg == null || msg.isEmpty()) msg = "Download failed. Check your connection.";
+                                          runJs("window.__lynxosDlError(" + jsString(fileName) + "," + jsString(msg) + ")");
+                                      } finally {
+                                          downloads.remove(fileName);
+                                          if (conn != null) conn.disconnect();
+                                      }
+                                  }
+                              });
+                              downloads.put(fileName, t);
+                              t.start();
+                          } catch (Exception ignored) {}
+                      }
+                      @JavascriptInterface
+                      public boolean isDownloaded(String fileName) {
+                          try {
+                              File f = downloadFile(fileName);
+                              return f.exists() && f.length() > 0;
+                          } catch (Exception e) {
+                              return false;
+                          }
+                      }
+                      @JavascriptInterface
+                      public boolean canInstallPackages() {
+                          try {
+                              if (Build.VERSION.SDK_INT >= 26) {
+                                  return getPackageManager().canRequestPackageInstalls();
+                              }
+                              return true;
+                          } catch (Exception e) {
+                              return false;
+                          }
+                      }
+                      @JavascriptInterface
+                      public void openInstallSettings() {
+                          try {
+                              Intent i = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                      Uri.parse("package:" + getPackageName()));
+                              i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                              startActivity(i);
+                          } catch (Exception ignored) {}
+                      }
+                      @JavascriptInterface
+                      public void installApk(final String fileName) {
+                          runOnUiThread(new Runnable() {
+                              @Override
+                              public void run() {
+                                  try {
+                                      File apk = downloadFile(fileName);
+                                      if (!apk.exists()) return;
+                                      Uri uri = FileProvider.getUriForFile(MainActivity.this,
+                                              getPackageName() + ".fileprovider", apk);
+                                      Intent intent = new Intent(Intent.ACTION_VIEW);
+                                      intent.setDataAndType(uri, "application/vnd.android.package-archive");
+                                      intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                      startActivity(intent);
+                                  } catch (Exception ignored) {}
+                              }
+                          });
+                      }
+                      @JavascriptInterface
+                      public void uninstallApp(final String pkg) {
+                          runOnUiThread(new Runnable() {
+                              @Override
+                              public void run() {
+                                  try {
+                                      Intent intent = new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + pkg));
+                                      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                      startActivity(intent);
+                                  } catch (Exception ignored) {}
+                              }
+                          });
+                      }
+                  }, "LynxosInstaller");
                   webView.addJavascriptInterface(new Object() {
                       @JavascriptInterface
                       public void exitApp() {
@@ -208,6 +383,19 @@ jobs:
                       webView.loadUrl("file:///android_asset/www/index.html");
                   }
                   setContentView(webView);
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  // Let the page refresh itself after installs, uninstalls or settings trips.
+                  try {
+                      if (webView != null) {
+                          webView.evaluateJavascript(
+                              "(function(){try{if(typeof window.__lynxosOnResume==='function'){window.__lynxosOnResume();}}catch(e){}})()",
+                              null);
+                      }
+                  } catch (Exception ignored) {}
               }
 
               private void defaultBackPressed() {
@@ -253,6 +441,7 @@ jobs:
                   try { if (webView != null) webView.saveState(outState); } catch (Exception ignored) {}
               }
           }
+
           EOF
 
       - name: Set up Gradle
