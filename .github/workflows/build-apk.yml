@@ -138,13 +138,14 @@ jobs:
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <!-- Lets the store restart its background update checker after a reboot. -->
               <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-              <!-- Lets the store see whether Justin's apps are installed (Android 11+). -->
+              <!-- Lets the store see installed apps (Android 11+). The intent-based
+                   query covers every launcher app, so new Lynxos apps never need a
+                   store rebuild just to be detected. -->
               <queries>
-                  <package android:name="com.workoutapp.app" />
-                  <package android:name="com.weatherapp.app" />
-                  <package android:name="com.rocknews.app" />
-                  <package android:name="com.metalradio.app" />
-                  <package android:name="com.lynxoshealth.app" />
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
               </queries>
               <application
                   android:label="Lynxos Store"
