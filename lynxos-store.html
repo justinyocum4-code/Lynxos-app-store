@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Lynxos Store</title>
+<style>
+  :root {
+    --gold: #d4af37;
+    --gold-dim: #9a7d24;
+    --ink: #0a0a0a;
+    --panel: #141414;
+    --panel2: #1d1d1d;
+    --white: #f5f5f5;
+    --muted: #b8b8b8;
+    --green: #4caf50;
+    --orange: #ff9800;
+    --red: #e05252;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ink); color: var(--white);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 1.05rem; line-height: 1.5;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  #lynxos-store-app { max-width: 640px; margin: 0 auto; padding: 1rem 1rem 3rem; }
+  header.store-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    padding: .75rem 0 1rem; border-bottom: 3px solid var(--gold); margin-bottom: 1rem;
+  }
+  header.store-head h1 { margin: 0; font-size: 1.7rem; color: var(--gold); letter-spacing: .5px; }
+  header.store-head p { margin: .15rem 0 0; color: var(--muted); font-size: .95rem; }
+  .refresh-btn {
+    flex: none; min-height: 48px; padding: .6rem 1rem; border-radius: 10px;
+    border: 2px solid var(--gold); background: transparent; color: var(--gold);
+    font-size: 1rem; font-weight: 700;
+  }
+  .refresh-btn:active { background: var(--gold); color: var(--ink); }
+  #store-status {
+    background: var(--panel); border: 1px solid #333; border-radius: 10px;
+    padding: .7rem .9rem; margin-bottom: 1rem; color: var(--muted); font-size: .95rem;
+  }
+  #store-status strong { color: var(--white); }
+  .app-card {
+    background: var(--panel); border: 1px solid #2c2c2c; border-radius: 14px;
+    padding: 1rem; margin-bottom: 1rem;
+  }
+  .app-card.update-available { border: 2px solid var(--orange); }
+  .app-card.installed { border-color: #2e4d2e; }
+  .app-top { display: flex; gap: .9rem; align-items: flex-start; }
+  .app-icon {
+    flex: none; width: 56px; height: 56px; border-radius: 14px;
+    background: var(--panel2); border: 1px solid var(--gold-dim);
+    display: flex; align-items: center; justify-content: center; font-size: 1.9rem;
+  }
+  .app-name { margin: 0; font-size: 1.25rem; color: var(--white); }
+  .app-desc { margin: .2rem 0 0; color: var(--muted); font-size: .95rem; }
+  .app-badges { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .55rem; }
+  .badge {
+    display: inline-block; padding: .25rem .65rem; border-radius: 999px;
+    font-size: .82rem; font-weight: 700;
+  }
+  .badge.latest { background: #222; color: var(--muted); border: 1px solid #444; }
+  .badge.is-installed { background: #12351a; color: var(--green); border: 1px solid #2e5d33; }
+  .badge.needs-update { background: #3d2703; color: var(--orange); border: 1px solid #8a5a00; }
+  .badge.not-installed { background: #1a1a1a; color: var(--muted); border: 1px solid #333; }
+  .badge.no-release { background: #222; color: var(--muted); border: 1px dashed #555; }
+  .release-notes { margin: .7rem 0 0; font-size: .92rem; color: var(--muted); }
+  .release-notes summary { color: var(--gold); font-weight: 700; cursor: pointer; min-height: 44px; display: inline-flex; align-items: center; }
+  .release-notes p { white-space: pre-wrap; margin: .4rem 0 0; }
+  .app-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .9rem; }
+  .store-btn {
+    min-height: 52px; padding: .7rem 1.3rem; border-radius: 12px; border: 0;
+    font-size: 1.05rem; font-weight: 800; cursor: pointer; text-decoration: none;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .store-btn.primary { background: var(--gold); color: var(--ink); }
+  .store-btn.secondary { background: transparent; color: var(--gold); border: 2px solid var(--gold); }
+  .store-btn.danger { background: transparent; color: var(--red); border: 2px solid var(--red); }
+  .store-btn[disabled] { opacity: .45; }
+  .dl-wrap { width: 100%; }
+  .dl-bar-outer {
+    height: 16px; background: #222; border-radius: 999px;
+    border: 1px solid #444; overflow: hidden;
+  }
+  .dl-bar-inner {
+    height: 100%; width: 0%; background: var(--gold);
+    border-radius: 999px; transition: width .2s;
+  }
+  .dl-text { margin-top: .45rem; color: var(--muted); font-size: .95rem; }
+  .dl-text strong { color: var(--white); }
+  .store-foot { margin-top: 1.5rem; color: var(--muted); font-size: .9rem; }
+  .store-foot strong { color: var(--white); }
+</style>
+</head>
+<body>
+<div id="lynxos-store-app">
+  <header class="store-head">
+    <div>
+      <h1>Lynxos Store</h1>
+      <p>Justin&rsquo;s apps, updates included.</p>
+    </div>
+    <button class="refresh-btn" type="button" id="refresh-btn" aria-label="Check for app updates now">&#8635; Check</button>
+  </header>
+
+  <div id="store-status" role="status" aria-live="polite">Starting the store&hellip;</div>
+  <div id="app-list" aria-label="Available apps"></div>
+
+  <footer class="store-foot">
+    <p><strong>How installs work:</strong> tap Install and the store downloads the app right here, showing the progress. Then tap Install now and Android pops up the install screen. The first time, Android asks you to allow installs from the Lynxos Store &mdash; that&rsquo;s normal for apps outside the Play Store.</p>
+    <p>Updates install over the old version and keep your data.</p>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // === Store configuration: add new apps here ===
+  var GITHUB_USER = "justinyocum4-code"; // Justin's GitHub username
+  var STORE_APPS = [
+    { name: "Lynxos Store", repo: "Lynxos-app-store", pkg: "com.lynxos.store", icon: "\u{1F6CD}\uFE0F", desc: "Justin's own app store. It updates itself right from here." },
+    { name: "Lynxos Gym", repo: "Lynxos-Gym", pkg: "com.workoutapp.app", icon: "\u{1F3CB}\uFE0F", desc: "4-week workout plans with a guided session coach." },
+    { name: "Weather", repo: "Weather-app", pkg: "com.weatherapp.app", icon: "\u{1F326}\uFE0F", desc: "Hourly and daily forecasts with severe weather alerts." },
+    { name: "Rock News", repo: "Rock-news-app", pkg: "com.rocknews.app", icon: "\u{1F3B8}", desc: "Metal, grunge and alternative news, tours and releases." },
+    { name: "Metal Radio", repo: "Metal-Radio", pkg: "com.metalradio.app", icon: "\u{1F4FB}", desc: "19 metal stations plus a searchable live radio directory." },
+    { name: "Lynxos Health", repo: "Lynxos-Gym-tracker", pkg: "com.lynxoshealth.app", icon: "\u{1F493}", desc: "Track your workouts, weight and health stats." }
+  ];
+  // Release tags must look like: v5.9+24  (version name + version code)
+
+  var listEl = document.getElementById("app-list");
+  var statusEl = document.getElementById("store-status");
+  var storeBooted = false;
+  var activeDownloads = {}; // fileName -> { pkg, url, name, lastQ }
+
+  function esc(text) {
+    return String(text == null ? "" : text)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function fileNameFor(pkg, code) { return pkg + "-" + (code || "latest") + ".apk"; }
+
+  function hasInstaller() {
+    try {
+      return typeof LynxosInstaller !== "undefined" && !!LynxosInstaller.startDownload;
+    } catch (e) { return false; }
+  }
+
+  function getInstalled(pkg) {
+    try {
+      if (typeof LynxosApps === "undefined" || !LynxosApps.getInstalledVersion) return null;
+      var raw = LynxosApps.getInstalledVersion(pkg);
+      if (!raw || raw === "null") return null;
+      return JSON.parse(raw);
+    } catch (e) { return null; }
+  }
+
+  function parseTag(tag) {
+    var m = /^v?(.+)\+(\d+)\s*$/.exec(String(tag || ""));
+    if (!m) return null;
+    return { versionName: m[1], versionCode: parseInt(m[2], 10) };
+  }
+
+  function installButton(apkUrl, app, ver, label) {
+    return '<button class="store-btn primary" type="button" data-apk="' + esc(apkUrl) +
+      '" data-pkg="' + esc(app.pkg) + '" data-name="' + esc(app.name) + '"' +
+      ' data-code="' + esc(ver.versionCode) + '"' +
+      ' aria-label="' + esc(label) + " " + esc(app.name) + " version " + esc(ver.versionName) + '">' +
+      esc(label) + " v" + esc(ver.versionName) + "</button>";
+  }
+
+  function renderCard(app, release, error) {
+    var card = document.createElement("article");
+    card.className = "app-card";
+    var badges = [];
+    var actions = "";
+    var notes = "";
+
+    if (error || !release) {
+      badges.push('<span class="badge no-release">Not published yet</span>');
+    } else {
+      var ver = parseTag(release.tag_name);
+      var apk = null;
+      var assets = release.assets || [];
+      for (var i = 0; i < assets.length; i++) {
+        if (/\.apk$/i.test(assets[i].name || "")) { apk = assets[i]; break; }
+      }
+      if (!ver || !apk) {
+        badges.push('<span class="badge no-release">Release found, no install file yet</span>');
+      } else {
+        var published = "";
+        try { published = new Date(release.published_at).toLocaleDateString(); } catch (e) {}
+        badges.push('<span class="badge latest">Latest: v' + esc(ver.versionName) + (published ? " &middot; " + esc(published) : "") + "</span>");
+        if (release.body) {
+          notes = '<details class="release-notes"><summary>What\u2019s new in v' + esc(ver.versionName) +
+            '</summary><p>' + esc(release.body).slice(0, 1200) + "</p></details>";
+        }
+        var installed = getInstalled(app.pkg);
+        if (installed && installed.versionCode >= ver.versionCode) {
+          card.classList.add("installed");
+          badges.push('<span class="badge is-installed">Installed: v' + esc(installed.versionName) + "</span>");
+          actions =
+            '<button class="store-btn secondary" type="button" data-open="' + esc(app.pkg) +
+            '" aria-label="Open ' + esc(app.name) + '">Open</button>' +
+            '<button class="store-btn danger" type="button" data-uninstall="' + esc(app.pkg) +
+            '" data-name="' + esc(app.name) +
+            '" aria-label="Uninstall ' + esc(app.name) + '">Uninstall</button>';
+        } else if (installed) {
+          card.classList.add("update-available");
+          badges.push('<span class="badge is-installed">Installed: v' + esc(installed.versionName) + '</span>');
+          badges.push('<span class="badge needs-update">Update available: v' + esc(ver.versionName) + "</span>");
+          actions = installButton(apk.browser_download_url, app, ver, "Update to");
+        } else {
+          badges.push('<span class="badge not-installed">Not installed</span>');
+          actions = installButton(apk.browser_download_url, app, ver, "Install");
+        }
+      }
+    }
+
+    card.innerHTML =
+      '<div class="app-top">' +
+        '<div class="app-icon" aria-hidden="true">' + app.icon + "</div>" +
+        "<div><h2 class=\"app-name\">" + esc(app.name) + "</h2>" +
+        '<p class="app-desc">' + esc(app.desc) + "</p>" +
+        '<div class="app-badges">' + badges.join("") + "</div></div>" +
+      "</div>" + notes +
+      (actions ? '<div class="app-actions" id="actions-' + esc(app.pkg) + '">' + actions + "</div>" : "");
+    return card;
+  }
+
+  function announce(msg) {
+    statusEl.innerHTML = "<strong>" + esc(msg) + "</strong>";
+  }
+
+  async function loadStore() {
+    listEl.innerHTML = "";
+    if (!GITHUB_USER || GITHUB_USER.indexOf("YOUR_") === 0) {
+      announce("The store is not connected yet.");
+      var p = document.createElement("p");
+      p.style.color = "var(--muted)";
+      p.textContent = "The store owner still needs to enter their GitHub username in the app.";
+      listEl.appendChild(p);
+      return;
+    }
+    announce("Checking for the latest versions\u2026");
+    var done = 0;
+    for (var i = 0; i < STORE_APPS.length; i++) {
+      (function (app) {
+        var url = "https://api.github.com/repos/" + GITHUB_USER + "/" + app.repo + "/releases/latest";
+        fetch(url, { headers: { "Accept": "application/vnd.github+json" } })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (rel) {
+            listEl.appendChild(renderCard(app, rel, !rel));
+            done++;
+            if (done === STORE_APPS.length) announce("Up to date. " + STORE_APPS.length + " apps listed.");
+          })
+          .catch(function () {
+            listEl.appendChild(renderCard(app, null, true));
+            done++;
+            if (done === STORE_APPS.length) announce("Finished with some connection trouble. Try Check again.");
+          });
+      })(STORE_APPS[i]);
+    }
+  }
+
+  // === In-store download + install flow ===
+
+  function showInstallNow(box, pkg, name, file) {
+    if (!box) return;
+    box.innerHTML = '<button class="store-btn primary" type="button" data-install="' + esc(file) +
+      '" data-pkg="' + esc(pkg) + '" data-name="' + esc(name) +
+      '" aria-label="Install ' + esc(name) + ' now">Install now</button>';
+  }
+
+  function startStoreDownload(btn) {
+    var url = btn.getAttribute("data-apk");
+    var pkg = btn.getAttribute("data-pkg");
+    var name = btn.getAttribute("data-name") || "the app";
+    var code = btn.getAttribute("data-code") || "";
+    var file = fileNameFor(pkg, code);
+    var box = document.getElementById("actions-" + pkg);
+    if (!hasInstaller()) {
+      // Web preview fallback: open the file the old way.
+      window.location.href = url;
+      return;
+    }
+    try {
+      if (LynxosInstaller.isDownloaded(file)) {
+        announce(name + " is already downloaded.");
+        showInstallNow(box, pkg, name, file);
+        return;
+      }
+    } catch (e) {}
+    activeDownloads[file] = { pkg: pkg, url: url, name: name, code: code, lastQ: -1 };
+    if (box) {
+      box.innerHTML =
+        '<div class="dl-wrap" role="group" aria-label="Downloading ' + esc(name) + '">' +
+        '<div class="dl-bar-outer"><div class="dl-bar-inner" id="dlbar-' + esc(pkg) + '"></div></div>' +
+        '<div class="dl-text" id="dltext-' + esc(pkg) + '">Starting download&hellip;</div>' +
+        "</div>";
+    }
+    announce("Downloading " + name + ".");
+    try {
+      LynxosInstaller.startDownload(url, file);
+    } catch (e) {
+      downloadFailed(file, "Could not start the download.");
+    }
+  }
+
+  function downloadFailed(file, msg) {
+    var d = activeDownloads[file];
+    if (!d) return;
+    delete activeDownloads[file];
+    var box = document.getElementById("actions-" + d.pkg);
+    if (box) {
+      box.innerHTML = '<div class="dl-text">Download failed: ' + esc(msg) + "</div>" +
+        '<button class="store-btn primary" type="button" data-apk="' + esc(d.url) +
+        '" data-pkg="' + esc(d.pkg) + '" data-name="' + esc(d.name) +
+        '" data-code="' + esc(d.code) + '">Try again</button>';
+    }
+    announce("Download failed. " + msg);
+  }
+
+  window.__lynxosDlProgress = function (file, pct) {
+    var d = activeDownloads[file];
+    if (!d) return;
+    pct = Math.max(0, Math.min(100, pct | 0));
+    var bar = document.getElementById("dlbar-" + d.pkg);
+    var txt = document.getElementById("dltext-" + d.pkg);
+    if (bar) bar.style.width = pct + "%";
+    if (txt) txt.innerHTML = "Downloading&hellip; <strong>" + pct + "%</strong>";
+    var q = Math.floor(pct / 25);
+    if (q > d.lastQ && pct < 100) {
+      d.lastQ = q;
+      announce("Downloaded " + (q * 25) + " percent.");
+    }
+  };
+
+  window.__lynxosDlDone = function (file) {
+    var d = activeDownloads[file];
+    if (!d) return;
+    delete activeDownloads[file];
+    announce(d.name + " downloaded. Tap Install now to install it.");
+    showInstallNow(document.getElementById("actions-" + d.pkg), d.pkg, d.name, file);
+  };
+
+  window.__lynxosDlError = function (file, msg) {
+    downloadFailed(file, msg || "Download failed.");
+  };
+
+  function startStoreInstall(btn) {
+    var file = btn.getAttribute("data-install");
+    var name = btn.getAttribute("data-name") || "the app";
+    try {
+      if (!LynxosInstaller.canInstallPackages()) {
+        announce("The store needs your permission to install apps. Opening settings: turn on Allow from this source, then come back and tap Install now again.");
+        LynxosInstaller.openInstallSettings();
+        return;
+      }
+      announce("Opening the install screen for " + name + ".");
+      LynxosInstaller.installApk(file);
+    } catch (e) {
+      announce("Could not open the installer.");
+    }
+  }
+
+  listEl.addEventListener("click", function (e) {
+    var apkBtn = e.target.closest("[data-apk]");
+    if (apkBtn) { startStoreDownload(apkBtn); return; }
+    var installBtn = e.target.closest("[data-install]");
+    if (installBtn) { startStoreInstall(installBtn); return; }
+    var uninstallBtn = e.target.closest("[data-uninstall]");
+    if (uninstallBtn) {
+      var name = uninstallBtn.getAttribute("data-name") || "the app";
+      var pkgU = uninstallBtn.getAttribute("data-uninstall");
+      try {
+        if (hasInstaller() && LynxosInstaller.uninstallApp) {
+          var opened = false;
+          try { opened = !!LynxosInstaller.uninstallApp(pkgU); } catch (e2) { opened = false; }
+          announce(opened ? ("Opening the uninstall screen for " + name + ".")
+                          : ("Could not open the uninstall screen for " + name + "."));
+        } else {
+          announce("Uninstall is only available inside the store app.");
+        }
+      } catch (err) { announce("Could not open the uninstall screen."); }
+      return;
+    }
+    var openBtn = e.target.closest("[data-open]");
+    if (openBtn) {
+      try {
+        if (typeof LynxosApps !== "undefined" && LynxosApps.openApp) {
+          if (!LynxosApps.openApp(openBtn.getAttribute("data-open"))) {
+            announce("Could not open that app.");
+          }
+        }
+      } catch (err) { announce("Could not open that app."); }
+    }
+  });
+
+  document.getElementById("refresh-btn").addEventListener("click", loadStore);
+
+  // Refresh the list when coming back from an install, uninstall or settings screen.
+  window.__lynxosOnResume = function () {
+    try { if (storeBooted) loadStore(); } catch (e) {}
+  };
+
+  // Phone back button: exit from the store home screen.
+  window.__lynxosOnBack = function () {
+    try {
+      if (typeof LynxosBack !== "undefined" && LynxosBack.exitApp) LynxosBack.exitApp();
+    } catch (e) {}
+    return true;
+  };
+
+  loadStore();
+  storeBooted = true;
+  // Hand the app catalog to the native background update checker.
+  try {
+    if (typeof LynxosStore !== "undefined" && LynxosStore.setCatalog) {
+      LynxosStore.setCatalog(JSON.stringify(STORE_APPS));
+    }
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>
