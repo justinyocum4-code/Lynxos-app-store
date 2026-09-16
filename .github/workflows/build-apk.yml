@@ -9,17 +9,17 @@ on:
         description: 'Version name (e.g. 1.2.1)'
         required: false
         type: string
-        default: '1.2.1'
+        default: ''
       version_code:
         description: 'Version code - must be a whole number bigger than last time'
         required: false
         type: string
-        default: '6'
+        default: ''
       release_notes:
         description: 'What changed in this version (shown in the store)'
         required: false
         type: string
-        default: 'Update'
+        default: ''
 
 jobs:
   build:
