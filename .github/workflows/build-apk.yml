@@ -26,6 +26,10 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-latest
+    env:
+      APP_VERSION_NAME: ${{ inputs.version_name || '1.2.1' }}
+      APP_VERSION_CODE: ${{ inputs.version_code || '6' }}
+      APP_RELEASE_NOTES: ${{ inputs.release_notes || 'Update' }}
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -108,8 +112,8 @@ jobs:
                   applicationId 'com.lynxos.store'
                   minSdk 26
                   targetSdk 34
-                  versionCode ${{ inputs.version_code || '6' }}
-                  versionName '${{ inputs.version_name || '1.2.1' }}'
+                  versionCode __APP_VERSION_CODE__
+                  versionName '__APP_VERSION_NAME__'
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -120,6 +124,7 @@ jobs:
               implementation 'androidx.core:core:1.13.1'
           }
           EOF
+          sed -i "s/__APP_VERSION_CODE__/$APP_VERSION_CODE/g; s/__APP_VERSION_NAME__/$APP_VERSION_NAME/g" app/build.gradle
 
           cat > app/src/main/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -717,7 +722,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ inputs.version_name || '1.2.1' }}+${{ inputs.version_code || '6' }}
-          name: v${{ inputs.version_name || '1.2.1' }}+${{ inputs.version_code || '6' }}
-          body: ${{ inputs.release_notes || 'Update' }}
+          tag_name: v${{ env.APP_VERSION_NAME }}+${{ env.APP_VERSION_CODE }}
+          name: v${{ env.APP_VERSION_NAME }}+${{ env.APP_VERSION_CODE }}
+          body: ${{ env.APP_RELEASE_NOTES }}
           files: app/build/outputs/apk/release/app-release.apk
