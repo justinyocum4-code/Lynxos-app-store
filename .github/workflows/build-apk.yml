@@ -8,14 +8,17 @@ on:
       version_name:
         description: 'Version name (e.g. 1.2.1)'
         required: false
+        type: string
         default: '1.2.1'
       version_code:
         description: 'Version code - must be a whole number bigger than last time'
         required: false
+        type: string
         default: '6'
       release_notes:
-        description: 'What changed (shown under "What\u2019s new" in the store)'
+        description: 'What changed in this version (shown in the store)'
         required: false
+        type: string
         default: 'Update'
 
 jobs:
