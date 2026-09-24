@@ -277,7 +277,7 @@
     for (var i = 0; i < STORE_APPS.length; i++) {
       (function (app) {
         var url = "https://api.github.com/repos/" + GITHUB_USER + "/" + app.repo + "/releases/latest";
-        fetch(url, { headers: { "Accept": "application/vnd.github+json" } })
+        fetch(url, { cache: "no-store", headers: { "Accept": "application/vnd.github+json" } })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (rel) {
             listEl.appendChild(renderCard(app, rel, !rel));
