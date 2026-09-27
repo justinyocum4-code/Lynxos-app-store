@@ -54,5 +54,12 @@
   "name": "Metalhead Social",
   "pkg": "com.metalheadsocial.app",
   "repo": "Metalhead-social-app"
+ },
+ {
+  "desc": "Kids shows streaming 24/7 plus classic public-domain cartoons. Everything plays inside the app.",
+  "icon": "📺",
+  "name": "Kids Shows",
+  "pkg": "com.kidsshows.app",
+  "repo": "Kids-Shows-app"
  }
 ]
