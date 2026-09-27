@@ -61,5 +61,12 @@
   "name": "Kids Shows",
   "pkg": "com.kidsshows.app",
   "repo": "Kids-Shows-app"
+ },
+ {
+  "desc": "Browse thousands of free legal movies with posters, details, trailers and in-app playback. Log into your Premiumize account to play your cloud files.",
+  "icon": "🎬",
+  "name": "Movies",
+  "pkg": "com.movieapp.app",
+  "repo": "Movie-app"
  }
 ]
