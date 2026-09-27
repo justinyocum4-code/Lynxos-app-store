@@ -1,0 +1,731 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Version name (e.g. 1.2.1)'
+        required: false
+        type: string
+        default: ''
+      version_code:
+        description: 'Version code - must be a whole number bigger than last time'
+        required: false
+        type: string
+        default: ''
+      release_notes:
+        description: 'What changed in this version (shown in the store)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    env:
+      APP_VERSION_NAME: ${{ inputs.version_name || '1.2.1' }}
+      APP_VERSION_CODE: ${{ inputs.version_code || '6' }}
+      APP_RELEASE_NOTES: ${{ inputs.release_notes || 'Update' }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK packages
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          if ! command -v sdkmanager >/dev/null 2>&1; then
+            export PATH="$PATH:$ANDROID_HOME/cmdline-tools/latest/bin"
+          fi
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Scaffold Android project
+        run: |
+          echo "=== Files in repo ==="
+          ls -la
+          HTML_FILE=""
+          for candidate in ./index.html ./*.html; do
+            if [ -f "$candidate" ] && grep -q 'id="lynxos-store-app"' "$candidate"; then
+              HTML_FILE="$candidate"
+              break
+            fi
+          done
+          if [ -z "$HTML_FILE" ]; then
+            echo "ERROR: no app HTML file found in the repository root."
+            echo "Upload the newest index.html (Add file > Upload files), then re-run this workflow."
+            exit 1
+          fi
+          echo "Using $HTML_FILE as the app page."
+
+          mkdir -p app/src/main/java/com/lynxos/store app/src/main/assets/www
+
+          cp "$HTML_FILE" app/src/main/assets/www/index.html
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "LynxosStore"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.9.1' apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.lynxos.store'
+              compileSdk 36
+              defaultConfig {
+                  applicationId 'com.lynxos.store'
+                  minSdk 26
+                  targetSdk 34
+                  versionCode __APP_VERSION_CODE__
+                  versionName '__APP_VERSION_NAME__'
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          dependencies {
+              implementation 'androidx.core:core:1.13.1'
+          }
+          EOF
+          sed -i "s/__APP_VERSION_CODE__/$APP_VERSION_CODE/g; s/__APP_VERSION_NAME__/$APP_VERSION_NAME/g" app/build.gradle
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <!-- Lets the store trigger the system install screen for downloaded APKs. -->
+              <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+              <!-- Lets the store open the system uninstall screen (Android 8+ requires this). -->
+              <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+              <!-- Lets the store post "update available" notifications. -->
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <!-- Lets the store restart its background update checker after a reboot. -->
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <!-- Lets the store see installed apps (Android 11+). The intent-based
+                   query covers every launcher app, so new Lynxos apps never need a
+                   store rebuild just to be detected. -->
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+              </queries>
+              <application
+                  android:label="Lynxos Store"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity
+                      android:name="com.lynxos.store.MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <provider
+                      android:name="androidx.core.content.FileProvider"
+                      android:authorities="com.lynxos.store.fileprovider"
+                      android:exported="false"
+                      android:grantUriPermissions="true">
+                      <meta-data
+                          android:name="android.support.FILE_PROVIDER_PATHS"
+                          android:resource="@xml/filepaths" />
+                  </provider>
+                  <!-- Background update checker: fires every few hours, also after reboot. -->
+                  <receiver android:name="com.lynxos.store.UpdateCheckReceiver" android:exported="false">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                      </intent-filter>
+                  </receiver>
+              </application>
+          </manifest>
+          EOF
+
+          mkdir -p app/src/main/res/xml
+          cat > app/src/main/res/xml/filepaths.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <external-files-path name="downloads" path="downloads/" />
+          </paths>
+          EOF
+
+          cat > app/src/main/java/com/lynxos/store/MainActivity.java <<'EOF'
+          package com.lynxos.store;
+
+          import android.app.Activity;
+          import android.app.AlarmManager;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.PackageInfo;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.provider.Settings;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import androidx.core.content.FileProvider;
+          import java.io.File;
+          import java.io.FileOutputStream;
+          import java.io.InputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.util.concurrent.ConcurrentHashMap;
+
+          public class MainActivity extends Activity {
+              private WebView webView;
+              private final Handler mainHandler = new Handler(Looper.getMainLooper());
+              private final ConcurrentHashMap<String, Thread> downloads = new ConcurrentHashMap<>();
+
+              private void runJs(final String code) {
+                  mainHandler.post(new Runnable() {
+                      @Override
+                      public void run() {
+                          try {
+                              if (webView != null) webView.evaluateJavascript(code, null);
+                          } catch (Exception ignored) {}
+                      }
+                  });
+              }
+
+              private static String jsString(String s) {
+                  if (s == null) s = "";
+                  return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
+                                 .replace("\n", "\\n").replace("\r", "") + "\"";
+              }
+
+              private File downloadFile(String fileName) {
+                  File dir = new File(getExternalFilesDir(null), "downloads");
+                  return new File(dir, fileName);
+              }
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  webView = new WebView(this);
+                  webView.getSettings().setJavaScriptEnabled(true);
+                  webView.getSettings().setDomStorageEnabled(true);
+                  webView.getSettings().setAllowFileAccess(true);
+                  webView.getSettings().setAllowFileAccessFromFileURLs(true);
+                  webView.getSettings().setAllowUniversalAccessFromFileURLs(true);
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          try {
+                              Uri uri = request.getUrl();
+                              String scheme = uri.getScheme();
+                              if (scheme != null && (scheme.equals("http") || scheme.equals("https"))) {
+                                  Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+                                  startActivity(intent);
+                                  return true;
+                              }
+                          } catch (Exception ignored) {}
+                          return false;
+                      }
+                  });
+                  // LynxosApps: lets the store see installed Lynxos apps and open them.
+                  webView.addJavascriptInterface(new Object() {
+                      @JavascriptInterface
+                      public String getInstalledVersion(String pkg) {
+                          try {
+                              PackageInfo pi = getPackageManager().getPackageInfo(pkg, 0);
+                              return "{\"versionName\":\"" + pi.versionName + "\",\"versionCode\":" + pi.versionCode + "}";
+                          } catch (Exception e) {
+                              return "null";
+                          }
+                      }
+                      @JavascriptInterface
+                      public boolean openApp(String pkg) {
+                          try {
+                              Intent intent = getPackageManager().getLaunchIntentForPackage(pkg);
+                              if (intent == null) return false;
+                              startActivity(intent);
+                              return true;
+                          } catch (Exception e) {
+                              return false;
+                          }
+                      }
+                  }, "LynxosApps");
+                  // LynxosInstaller: in-store APK downloads, installs and uninstalls.
+                  webView.addJavascriptInterface(new Object() {
+                      @JavascriptInterface
+                      public void startDownload(final String url, final String fileName) {
+                          try {
+                              if (fileName == null || fileName.isEmpty() || downloads.containsKey(fileName)) return;
+                              Thread t = new Thread(new Runnable() {
+                                  @Override
+                                  public void run() {
+                                      HttpURLConnection conn = null;
+                                      try {
+                                          File out = downloadFile(fileName);
+                                          File parent = out.getParentFile();
+                                          if (parent != null && !parent.exists()) parent.mkdirs();
+                                          conn = (HttpURLConnection) new URL(url).openConnection();
+                                          conn.setInstanceFollowRedirects(true);
+                                          conn.setConnectTimeout(25000);
+                                          conn.setReadTimeout(25000);
+                                          conn.setRequestProperty("User-Agent", "LynxosStore/1.1");
+                                          conn.setRequestProperty("Accept", "application/octet-stream");
+                                          conn.connect();
+                                          int total = conn.getContentLength();
+                                          InputStream in = conn.getInputStream();
+                                          FileOutputStream fos = new FileOutputStream(out);
+                                          byte[] buf = new byte[16384];
+                                          int n;
+                                          long done = 0;
+                                          int lastPct = -1;
+                                          while ((n = in.read(buf)) != -1) {
+                                              fos.write(buf, 0, n);
+                                              done += n;
+                                              if (total > 0) {
+                                                  int pct = (int) (done * 100L / total);
+                                                  if (pct != lastPct) {
+                                                      lastPct = pct;
+                                                      runJs("window.__lynxosDlProgress(" + jsString(fileName) + "," + pct + ")");
+                                                  }
+                                              }
+                                          }
+                                          fos.flush();
+                                          fos.close();
+                                          in.close();
+                                          runJs("window.__lynxosDlDone(" + jsString(fileName) + ")");
+                                      } catch (Exception e) {
+                                          String msg = e.getMessage();
+                                          if (msg == null || msg.isEmpty()) msg = "Download failed. Check your connection.";
+                                          runJs("window.__lynxosDlError(" + jsString(fileName) + "," + jsString(msg) + ")");
+                                      } finally {
+                                          downloads.remove(fileName);
+                                          if (conn != null) conn.disconnect();
+                                      }
+                                  }
+                              });
+                              downloads.put(fileName, t);
+                              t.start();
+                          } catch (Exception ignored) {}
+                      }
+                      @JavascriptInterface
+                      public boolean isDownloaded(String fileName) {
+                          try {
+                              File f = downloadFile(fileName);
+                              return f.exists() && f.length() > 0;
+                          } catch (Exception e) {
+                              return false;
+                          }
+                      }
+                      @JavascriptInterface
+                      public boolean canInstallPackages() {
+                          try {
+                              if (Build.VERSION.SDK_INT >= 26) {
+                                  return getPackageManager().canRequestPackageInstalls();
+                              }
+                              return true;
+                          } catch (Exception e) {
+                              return false;
+                          }
+                      }
+                      @JavascriptInterface
+                      public void openInstallSettings() {
+                          try {
+                              Intent i = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                      Uri.parse("package:" + getPackageName()));
+                              i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                              startActivity(i);
+                          } catch (Exception ignored) {}
+                      }
+                      @JavascriptInterface
+                      public void installApk(final String fileName) {
+                          runOnUiThread(new Runnable() {
+                              @Override
+                              public void run() {
+                                  try {
+                                      File apk = downloadFile(fileName);
+                                      if (!apk.exists()) return;
+                                      Uri uri = FileProvider.getUriForFile(MainActivity.this,
+                                              getPackageName() + ".fileprovider", apk);
+                                      Intent intent = new Intent(Intent.ACTION_VIEW);
+                                      intent.setDataAndType(uri, "application/vnd.android.package-archive");
+                                      intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                      startActivity(intent);
+                                  } catch (Exception ignored) {}
+                              }
+                          });
+                      }
+                      @JavascriptInterface
+                      public boolean uninstallApp(final String pkg) {
+                          try {
+                              Intent intent = new Intent(Intent.ACTION_UNINSTALL_PACKAGE, Uri.parse("package:" + pkg));
+                              if (intent.resolveActivity(getPackageManager()) == null) {
+                                  intent = new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + pkg));
+                                  if (intent.resolveActivity(getPackageManager()) == null) return false;
+                              }
+                              final Intent launch = intent;
+                              runOnUiThread(new Runnable() {
+                                  @Override
+                                  public void run() {
+                                      try { startActivity(launch); } catch (Exception ignored) {}
+                                  }
+                              });
+                              return true;
+                          } catch (Exception e) {
+                              return false;
+                          }
+                      }
+                  }, "LynxosInstaller");
+                  webView.addJavascriptInterface(new Object() {
+                      @JavascriptInterface
+                      public void exitApp() {
+                          try {
+                              MainActivity.this.runOnUiThread(new Runnable() {
+                                  @Override
+                                  public void run() {
+                                      try { MainActivity.this.finish(); } catch (Exception ignored) {}
+                                  }
+                              });
+                          } catch (Exception ignored) {}
+                      }
+                  }, "LynxosBack");
+                  // LynxosStore: the page hands over its app catalog so the
+                  // background update checker knows which repos to watch.
+                  webView.addJavascriptInterface(new Object() {
+                      @JavascriptInterface
+                      public void setCatalog(String json) {
+                          try {
+                              getSharedPreferences(UpdateCheckReceiver.PREFS, MODE_PRIVATE)
+                                  .edit()
+                                  .putString(UpdateCheckReceiver.CATALOG_KEY, json)
+                                  .apply();
+                          } catch (Exception ignored) {}
+                      }
+                  }, "LynxosStore");
+                  if (savedInstanceState != null) {
+                      webView.restoreState(savedInstanceState);
+                  } else {
+                      webView.loadUrl("file:///android_asset/www/index.html");
+                  }
+                  setContentView(webView);
+                  // Background update alerts: notification channel, repeating
+                  // checker (every ~6 hours, survives reboot), and the Android
+                  // 13+ notification permission prompt.
+                  createUpdateChannel();
+                  UpdateCheckReceiver.schedule(this);
+                  requestNotificationPermissionIfNeeded();
+              }
+
+              private void createUpdateChannel() {
+                  try {
+                      if (Build.VERSION.SDK_INT >= 26) {
+                          NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                          if (nm != null) {
+                              nm.createNotificationChannel(new NotificationChannel(
+                                  UpdateCheckReceiver.CHANNEL_ID, "App updates",
+                                  NotificationManager.IMPORTANCE_DEFAULT));
+                          }
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              private void requestNotificationPermissionIfNeeded() {
+                  try {
+                      if (Build.VERSION.SDK_INT >= 33 &&
+                          checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                              != PackageManager.PERMISSION_GRANTED) {
+                          requestPermissions(
+                              new String[]{"android.permission.POST_NOTIFICATIONS"}, 9001);
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  // Let the page refresh itself after installs, uninstalls or settings trips.
+                  try {
+                      if (webView != null) {
+                          webView.evaluateJavascript(
+                              "(function(){try{if(typeof window.__lynxosOnResume==='function'){window.__lynxosOnResume();}}catch(e){}})()",
+                              null);
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              private void defaultBackPressed() {
+                  try {
+                      super.onBackPressed();
+                  } catch (Exception e) {
+                      try { finish(); } catch (Exception ignored) {}
+                  }
+              }
+
+              @Override
+              public void onBackPressed() {
+                  // Let the page handle back first; the page calls LynxosBack.exitApp()
+                  // when there is nowhere left to go.
+                  if (webView == null) {
+                      defaultBackPressed();
+                      return;
+                  }
+                  try {
+                      webView.evaluateJavascript(
+                          "(function(){try{return (typeof window.__lynxosOnBack==='function')?'1':'0';}catch(e){return '0';}})()",
+                          value -> {
+                              try {
+                                  if ("\"1\"".equals(value)) {
+                                      webView.evaluateJavascript("window.__lynxosOnBack()", null);
+                                  } else if (webView.canGoBack()) {
+                                      webView.goBack();
+                                  } else {
+                                      MainActivity.this.defaultBackPressed();
+                                  }
+                              } catch (Exception ignored) {
+                                  try { MainActivity.this.defaultBackPressed(); } catch (Exception ignored2) {}
+                              }
+                          });
+                  } catch (Exception e) {
+                      defaultBackPressed();
+                  }
+              }
+
+              @Override
+              protected void onSaveInstanceState(Bundle outState) {
+                  super.onSaveInstanceState(outState);
+                  try { if (webView != null) webView.saveState(outState); } catch (Exception ignored) {}
+              }
+          }
+
+          EOF
+
+          cat > app/src/main/java/com/lynxos/store/UpdateCheckReceiver.java <<'EOF'
+          package com.lynxos.store;
+
+          import android.app.AlarmManager;
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.PackageInfo;
+          import android.content.pm.PackageManager;
+          import android.os.Build;
+
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          import java.io.BufferedReader;
+          import java.io.InputStreamReader;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.util.ArrayList;
+          import java.util.List;
+
+          // Background update checker for the Lynxos Store. Every few hours it
+          // compares each catalog app's latest GitHub release against the
+          // installed version and posts a notification when updates exist.
+          public class UpdateCheckReceiver extends BroadcastReceiver {
+              public static final String CHANNEL_ID = "lynxos_updates";
+              public static final String PREFS = "lynxos_store_prefs";
+              public static final String CATALOG_KEY = "catalog_json";
+              private static final String GITHUB_USER = "justinyocum4-code";
+              private static final long INTERVAL_MS = 6 * 60 * 60 * 1000L;
+
+              // (Re)schedule the repeating check.
+              public static void schedule(Context context) {
+                  try {
+                      Intent i = new Intent(context, UpdateCheckReceiver.class);
+                      PendingIntent pi = PendingIntent.getBroadcast(context, 0, i,
+                              PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                      AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+                      if (am != null) {
+                          am.setInexactRepeating(AlarmManager.RTC_WAKEUP,
+                                  System.currentTimeMillis() + INTERVAL_MS, INTERVAL_MS, pi);
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              @Override
+              public void onReceive(Context context, Intent intent) {
+                  String action = intent != null ? intent.getAction() : null;
+                  if (Intent.ACTION_BOOT_COMPLETED.equals(action)) {
+                      schedule(context);
+                      return;
+                  }
+                  final PendingResult pr = goAsync();
+                  final Context appCtx = context.getApplicationContext();
+                  new Thread(new Runnable() {
+                      @Override public void run() {
+                          try { checkForUpdates(appCtx); } catch (Exception ignored) {}
+                          pr.finish();
+                      }
+                  }).start();
+              }
+
+              private static void checkForUpdates(Context context) {
+                  SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                  String catalog = prefs.getString(CATALOG_KEY, null);
+                  if (catalog == null || catalog.length() < 10) return;
+                  List<String> updated = new ArrayList<String>();
+                  try {
+                      JSONArray arr = new JSONArray(catalog);
+                      PackageManager pm = context.getPackageManager();
+                      for (int i = 0; i < arr.length(); i++) {
+                          JSONObject app = arr.getJSONObject(i);
+                          String repo = app.optString("repo", "");
+                          String pkg = app.optString("pkg", "");
+                          String name = app.optString("name", pkg);
+                          if (repo.isEmpty() || pkg.isEmpty()) continue;
+                          long installed = installedVersionCode(pm, pkg);
+                          if (installed < 0) continue; // not installed: nothing to update
+                          long latest = latestReleaseCode(repo);
+                          if (latest > installed) updated.add(name);
+                      }
+                  } catch (Exception ignored) { return; }
+                  if (!updated.isEmpty()) postNotification(context, updated);
+              }
+
+              private static long installedVersionCode(PackageManager pm, String pkg) {
+                  try {
+                      PackageInfo pi = pm.getPackageInfo(pkg, 0);
+                      if (Build.VERSION.SDK_INT >= 28) return pi.getLongVersionCode();
+                      return pi.versionCode;
+                  } catch (Exception e) { return -1; }
+              }
+
+              private static long latestReleaseCode(String repo) {
+                  HttpURLConnection c = null;
+                  try {
+                      URL url = new URL("https://api.github.com/repos/" + GITHUB_USER + "/" + repo + "/releases/latest");
+                      c = (HttpURLConnection) url.openConnection();
+                      c.setRequestProperty("Accept", "application/vnd.github+json");
+                      c.setConnectTimeout(15000);
+                      c.setReadTimeout(15000);
+                      if (c.getResponseCode() != 200) return -1;
+                      BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"));
+                      StringBuilder sb = new StringBuilder();
+                      String line;
+                      while ((line = br.readLine()) != null) sb.append(line);
+                      br.close();
+                      String tag = new JSONObject(sb.toString()).optString("tag_name", "");
+                      int plus = tag.lastIndexOf('+');
+                      if (plus < 0) return -1;
+                      return Long.parseLong(tag.substring(plus + 1).trim());
+                  } catch (Exception e) { return -1; }
+                  finally { if (c != null) { try { c.disconnect(); } catch (Exception ignored) {} } }
+              }
+
+              private static void postNotification(Context context, List<String> names) {
+                  try {
+                      NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+                      if (nm == null) return;
+                      if (Build.VERSION.SDK_INT >= 26) {
+                          nm.createNotificationChannel(new NotificationChannel(
+                                  CHANNEL_ID, "App updates", NotificationManager.IMPORTANCE_DEFAULT));
+                      }
+                      Intent open = new Intent(context, MainActivity.class);
+                      open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                      PendingIntent pi = PendingIntent.getActivity(context, 0, open,
+                              PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                      StringBuilder sb = new StringBuilder();
+                      for (int i = 0; i < names.size() && i < 3; i++) {
+                          if (i > 0) sb.append(", ");
+                          sb.append(names.get(i));
+                      }
+                      if (names.size() > 3) sb.append(", and more");
+                      sb.append(names.size() == 1 ? " has an update." : " have updates.");
+                      Notification.Builder b = Build.VERSION.SDK_INT >= 26
+                              ? new Notification.Builder(context, CHANNEL_ID)
+                              : new Notification.Builder(context);
+                      nm.notify(1001, b.setContentTitle("Updates available in Lynxos Store")
+                              .setContentText(sb.toString())
+                              .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                              .setContentIntent(pi)
+                              .setAutoCancel(true)
+                              .build());
+                  } catch (Exception ignored) {}
+              }
+          }
+
+          EOF
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+
+      - name: Build release APK (unsigned)
+        run: gradle :app:assembleRelease
+
+      - name: Sign release APK with the Lynxos key
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > /tmp/lynxos-release.p12
+          "$APKSIGNER" sign --ks /tmp/lynxos-release.p12 --ks-type PKCS12 \
+            --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
+            --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
+            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
+            --out app/build/outputs/apk/release/app-release.apk \
+            app/build/outputs/apk/release/app-release-unsigned.apk
+          rm -f /tmp/lynxos-release.p12
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk | head -3
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: lynxos-store-apk
+          path: app/build/outputs/apk/release/app-release.apk
+
+      - name: Publish GitHub release
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.APP_VERSION_NAME }}+${{ env.APP_VERSION_CODE }}
+          name: v${{ env.APP_VERSION_NAME }}+${{ env.APP_VERSION_CODE }}
+          body: ${{ env.APP_RELEASE_NOTES }}
+          files: app/build/outputs/apk/release/app-release.apk
