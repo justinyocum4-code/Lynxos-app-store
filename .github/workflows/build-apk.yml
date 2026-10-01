@@ -295,7 +295,8 @@ jobs:
                       @JavascriptInterface
                       public void startDownload(final String url, final String fileName) {
                           try {
-                              if (fileName == null || fileName.isEmpty() || downloads.containsKey(fileName)) return;
+                              if (fileName == null || fileName.isEmpty()) return;
+                              cancelDownload(fileName); // never silently ignore: a stuck earlier attempt is cleared first
                               Thread t = new Thread(new Runnable() {
                                   @Override
                                   public void run() {
@@ -338,13 +339,24 @@ jobs:
                                           if (msg == null || msg.isEmpty()) msg = "Download failed. Check your connection.";
                                           runJs("window.__lynxosDlError(" + jsString(fileName) + "," + jsString(msg) + ")");
                                       } finally {
-                                          downloads.remove(fileName);
+                                          downloads.remove(fileName, Thread.currentThread());
                                           if (conn != null) conn.disconnect();
                                       }
                                   }
                               });
                               downloads.put(fileName, t);
                               t.start();
+                          } catch (Exception ignored) {}
+                      }
+                      @JavascriptInterface
+                      public void cancelDownload(final String fileName) {
+                          try {
+                              if (fileName == null || fileName.isEmpty()) return;
+                              Thread old = downloads.remove(fileName);
+                              if (old != null) { try { old.interrupt(); } catch (Exception ignored) {} }
+                              // drop any partial file so a retry starts clean
+                              try { File f = downloadFile(fileName); if (f.exists()) f.delete(); }
+                              catch (Exception ignored) {}
                           } catch (Exception ignored) {}
                       }
                       @JavascriptInterface
