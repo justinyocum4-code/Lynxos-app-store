@@ -302,6 +302,33 @@
       '" aria-label="Install ' + esc(name) + ' now">Install now</button>';
   }
 
+  // Watchdog: if a download reports zero progress for this long, declare it stuck
+  // instead of leaving the screen on "Starting download..." forever.
+  var DL_STALL_MS = 45000;
+
+  function armWatchdog(file) {
+    var d = activeDownloads[file];
+    if (!d) return;
+    try { if (d.watchdog) clearTimeout(d.watchdog); } catch (e) {}
+    d.watchdog = setTimeout(function () { downloadStuck(file); }, DL_STALL_MS);
+  }
+
+  function clearWatchdog(file) {
+    var d = activeDownloads[file];
+    if (d && d.watchdog) { try { clearTimeout(d.watchdog); } catch (e) {} d.watchdog = 0; }
+  }
+
+  function downloadStuck(file) {
+    var d = activeDownloads[file];
+    if (!d) return;
+    try {
+      if (typeof LynxosInstaller !== "undefined" && LynxosInstaller.cancelDownload) {
+        LynxosInstaller.cancelDownload(file);
+      }
+    } catch (e) {}
+    downloadFailed(file, "The download stalled and never got going. Check your connection, then try again.");
+  }
+
   function startStoreDownload(btn) {
     var url = btn.getAttribute("data-apk");
     var pkg = btn.getAttribute("data-pkg");
@@ -321,7 +348,7 @@
         return;
       }
     } catch (e) {}
-    activeDownloads[file] = { pkg: pkg, url: url, name: name, code: code, lastQ: -1 };
+    activeDownloads[file] = { pkg: pkg, url: url, name: name, code: code, lastQ: -1, watchdog: 0 };
     if (box) {
       box.innerHTML =
         '<div class="dl-wrap" role="group" aria-label="Downloading ' + esc(name) + '">' +
@@ -332,12 +359,14 @@
     announce("Downloading " + name + ".");
     try {
       LynxosInstaller.startDownload(url, file);
+      armWatchdog(file);
     } catch (e) {
       downloadFailed(file, "Could not start the download.");
     }
   }
 
   function downloadFailed(file, msg) {
+    clearWatchdog(file);
     var d = activeDownloads[file];
     if (!d) return;
     delete activeDownloads[file];
@@ -354,6 +383,7 @@
   window.__lynxosDlProgress = function (file, pct) {
     var d = activeDownloads[file];
     if (!d) return;
+    armWatchdog(file);
     pct = Math.max(0, Math.min(100, pct | 0));
     var bar = document.getElementById("dlbar-" + d.pkg);
     var txt = document.getElementById("dltext-" + d.pkg);
@@ -367,6 +397,7 @@
   };
 
   window.__lynxosDlDone = function (file) {
+    clearWatchdog(file);
     var d = activeDownloads[file];
     if (!d) return;
     delete activeDownloads[file];
