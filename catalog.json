@@ -75,5 +75,12 @@
   "name": "Lynxos Music",
   "pkg": "com.lynxosmusic.app",
   "repo": "Lynxos-Music"
+ },
+ {
+  "desc": "Learn languages by ear: Duolingo-style spoken lessons in 18 languages, with XP, streaks and progress saved to your account.",
+  "icon": "🗣️",
+  "name": "Lynxo Language Learning",
+  "pkg": "com.lynxolanguage.app",
+  "repo": "Lynxo-Language"
  }
 ]
