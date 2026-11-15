@@ -92,6 +92,17 @@
   .dl-text strong { color: var(--white); }
   .store-foot { margin-top: 1.5rem; color: var(--muted); font-size: .9rem; }
   .store-foot strong { color: var(--white); }
+  /* v1.2.9: TV mode — remote-driven, 10-foot UI. Gold focus ring (the
+     store had no visible focus cue at all), larger type, wider column. */
+  body.tv { font-size: 1.35rem; }
+  body.tv #lynxos-store-app { max-width: 860px; }
+  body.tv header.store-head h1 { font-size: 2.1rem; }
+  body.tv .refresh-btn { min-height: 60px; font-size: 1.2rem; }
+  body.tv .store-btn { min-height: 60px; font-size: 1.25rem; }
+  body.tv .app-name { font-size: 1.5rem; }
+  body.tv .app-desc, body.tv .release-notes, body.tv .dl-text { font-size: 1.15rem; }
+  body.tv :focus { outline: 3px solid var(--gold); outline-offset: 3px; }
+  body.tv .release-notes summary { min-height: 52px; }
 </style>
 </head>
 <body>
@@ -108,7 +119,7 @@
   <div id="app-list" aria-label="Available apps"></div>
 
   <footer class="store-foot">
-    <p><strong>How installs work:</strong> tap Install and the store downloads the app right here, showing the progress. Then tap Install now and Android pops up the install screen. The first time, Android asks you to allow installs from the Lynxos Store &mdash; that&rsquo;s normal for apps outside the Play Store.</p>
+    <p id="how-installs"><strong>How installs work:</strong> tap Install and the store downloads the app right here, showing the progress. Then tap Install now and Android pops up the install screen. The first time, Android asks you to allow installs from the Lynxos Store &mdash; that&rsquo;s normal for apps outside the Play Store.</p>
     <p>Updates install over the old version and keep your data.</p>
   </footer>
 </div>
@@ -116,6 +127,19 @@
 <script>
 (function () {
   "use strict";
+
+  /* v1.2.9: TV mode — Fire TV (AFT*), Android TV / Google TV: the remote
+     drives D-pad focus. Same detection as Lynxos Music, including the
+     large-screen + no-touch fallback for TVs whose UA carries no TV token. */
+  var IS_TV = /AFT|Fire TV|Android TV|Google TV|Leanback/i.test(navigator.userAgent || "");
+  try {
+    if(!IS_TV){
+      var _tvShort = Math.min(window.screen.width || 0, window.screen.height || 0);
+      var _tvNoTouch = !("ontouchstart" in window) && (navigator.maxTouchPoints || 0) === 0;
+      if(_tvShort >= 720 && _tvNoTouch) IS_TV = true;
+    }
+  } catch(e){}
+  try { if(IS_TV) document.body.classList.add("tv"); } catch(e){}
 
   // === Store configuration ===
   var GITHUB_USER = "justinyocum4-code"; // Justin's GitHub username
@@ -126,13 +150,15 @@
     { name: "Lynxos Store", repo: "Lynxos-app-store", pkg: "com.lynxos.store", icon: "\u{1F6CD}\uFE0F", desc: "Justin's own app store. It updates itself right from here." },
     { name: "Lynxos Gym", repo: "Lynxos-Gym", pkg: "com.workoutapp.app", icon: "\u{1F3CB}\uFE0F", desc: "4-week workout plans with a guided session coach." },
     { name: "Weather", repo: "Weather-app", pkg: "com.weatherapp.app", icon: "\u{1F326}\uFE0F", desc: "Hourly and daily forecasts with severe weather alerts." },
-    { name: "Weather In Real Time", repo: "Weather-In-Real-Time", pkg: "com.weatherrealtime.app", icon: "\u{1F329}\uFE0F", desc: "Full-screen live national radar with voice weather alerts." },
+    { name: "Weather In Real Time", repo: "Weather-In-Real-Time", pkg: "com.weatherrealtime.app", icon: "\u{1F329}\uFE0F", desc: "Full-screen live national radar with voice weather alerts, severity and location priority." },
     { name: "Rock News", repo: "Rock-news-app", pkg: "com.rocknews.app", icon: "\u{1F3B8}", desc: "Metal, grunge and alternative news, tours and releases." },
     { name: "Metal Radio", repo: "Metal-Radio", pkg: "com.metalradio.app", icon: "\u{1F4FB}", desc: "19 metal stations plus a searchable live radio directory." },
-    { name: "Lynxos Health", repo: "Lynxos-Gym-tracker", pkg: "com.lynxoshealth.app", icon: "\u{1F493}", desc: "Track your workouts, weight and health stats." },
     { name: "Lynxos Podcasts", repo: "Lynxos-podcast-app", pkg: "com.lynxospodcasts.app", icon: "\u{1F3A7}", desc: "Rock and metal podcasts ready to play, plus true crime, comedy, news and history." },
-    { name: "Lynxos Explorer", repo: "Lynxos-explorer-app", pkg: "com.lynxosexplore.app", icon: "\u{1F9ED}", desc: "Walking companion: announces nearby places, compass, camera descriptions, and saved spots." },
-    { name: "Metalhead Social", repo: "Metalhead-social-app", pkg: "com.metalheadsocial.app", icon: "\u{1F918}", desc: "Your own metalhead clubhouse: feed, friends, groups, DMs, shows and polls." }
+    { name: "Metalhead Social", repo: "Metalhead-social-app", pkg: "com.metalheadsocial.app", icon: "\u{1F918}", desc: "Your own metalhead clubhouse: feed, friends, groups, DMs, shows and polls." },
+    { name: "Kids Shows", repo: "Kids-Shows-app", pkg: "com.kidsshows.app", icon: "\u{1F4FA}", desc: "Kids shows streaming 24/7 plus classic public-domain cartoons. Everything plays inside the app." },
+    { name: "Movies", repo: "Movie-app", pkg: "com.movieapp.app", icon: "\u{1F3AC}", desc: "Browse thousands of free legal movies with posters, details, trailers and in-app playback. Log into your Premiumize account to play your cloud files." },
+    { name: "Lynxos Music", repo: "Lynxos-Music", pkg: "com.lynxosmusic.app", icon: "\u{1F3B5}", desc: "YouTube-powered music player with search, playlists, liked songs, and listening history." },
+    { name: "Lynxo Language Learning", repo: "Lynxo-Language", pkg: "com.lynxolanguage.app", icon: "\u{1F5E3}\uFE0F", desc: "Learn languages by ear: Duolingo-style spoken lessons in 18 languages, with XP, streaks and progress saved to your account." }
   ];
   // Release tags must look like: v5.9+24  (version name + version code)
 
@@ -241,6 +267,14 @@
     statusEl.innerHTML = "<strong>" + esc(msg) + "</strong>";
   }
 
+  /* v1.2.9: TV focus — every list re-render and install swap rebuilds the
+     buttons, which drops focus to the top of the page. On TV, land focus
+     back on the Check button so a remote user never has to start over. */
+  function focusRefreshOnTv() {
+    if (!IS_TV) return;
+    try { var b = document.getElementById("refresh-btn"); if (b) b.focus(); } catch (e) {}
+  }
+
   async function loadCatalog() {
     try {
       var r = await fetch(CATALOG_URL, { cache: "no-store" });
@@ -282,12 +316,12 @@
           .then(function (rel) {
             listEl.appendChild(renderCard(app, rel, !rel));
             done++;
-            if (done === STORE_APPS.length) announce("Up to date. " + STORE_APPS.length + " apps listed.");
+            if (done === STORE_APPS.length) { announce("Up to date. " + STORE_APPS.length + " apps listed."); focusRefreshOnTv(); }
           })
           .catch(function () {
             listEl.appendChild(renderCard(app, null, true));
             done++;
-            if (done === STORE_APPS.length) announce("Finished with some connection trouble. Try Check again.");
+            if (done === STORE_APPS.length) { announce("Finished with some connection trouble. Try Check again."); focusRefreshOnTv(); }
           });
       })(STORE_APPS[i]);
     }
@@ -300,6 +334,9 @@
     box.innerHTML = '<button class="store-btn primary" type="button" data-install="' + esc(file) +
       '" data-pkg="' + esc(pkg) + '" data-name="' + esc(name) +
       '" aria-label="Install ' + esc(name) + ' now">Install now</button>';
+    /* v1.2.9: the swap rebuilds the actions box — on TV, land focus on the
+       new Install now button instead of dropping it to the top. */
+    if (IS_TV) { try { var b = box.querySelector("[data-install]"); if (b) b.focus(); } catch (e) {} }
   }
 
   // Watchdog: if a download reports zero progress for this long, declare it stuck
@@ -376,6 +413,8 @@
         '<button class="store-btn primary" type="button" data-apk="' + esc(d.url) +
         '" data-pkg="' + esc(d.pkg) + '" data-name="' + esc(d.name) +
         '" data-code="' + esc(d.code) + '">Try again</button>';
+      /* v1.2.9: same focus landing as the install swap — TV only. */
+      if (IS_TV) { try { var b2 = box.querySelector("[data-apk]"); if (b2) b2.focus(); } catch (e) {} }
     }
     announce("Download failed. " + msg);
   }
@@ -401,7 +440,7 @@
     var d = activeDownloads[file];
     if (!d) return;
     delete activeDownloads[file];
-    announce(d.name + " downloaded. Tap Install now to install it.");
+    announce(d.name + " downloaded. " + (IS_TV ? "Press" : "Tap") + " Install now to install it.");
     showInstallNow(document.getElementById("actions-" + d.pkg), d.pkg, d.name, file);
   };
 
@@ -414,8 +453,16 @@
     var name = btn.getAttribute("data-name") || "the app";
     try {
       if (!LynxosInstaller.canInstallPackages()) {
-        announce("The store needs your permission to install apps. Opening settings: turn on Allow from this source, then come back and tap Install now again.");
-        LynxosInstaller.openInstallSettings();
+        /* v1.2.9: openInstallSettings reports whether the settings screen
+           actually opened — on a TV with no usable settings route it fails
+           silently, so say the manual path instead of stranding the user. */
+        var _opened = true;
+        try { _opened = LynxosInstaller.openInstallSettings() !== false; } catch (e2) { _opened = false; }
+        if (!_opened) {
+          announce("Couldn't open the settings screen on this TV. Open Settings, then Apps, then Special app access, then Install unknown apps, and allow the Lynxos Store.");
+          return;
+        }
+        announce("The store needs your permission to install apps. Opening settings: turn on Allow from this source, then come back and " + (IS_TV ? "press" : "tap") + " Install now again.");
         return;
       }
       announce("Opening the install screen for " + name + ".");
@@ -460,6 +507,11 @@
 
   document.getElementById("refresh-btn").addEventListener("click", loadStore);
 
+  // Called from native code when a link has nowhere to open (no browser on this TV).
+  window.__lynxosNoBrowser = function () {
+    announce("There's no browser on this TV to open that link.");
+  };
+
   // Refresh the list when coming back from an install, uninstall or settings screen.
   window.__lynxosOnResume = function () {
     try { if (storeBooted) loadStore(); } catch (e) {}
@@ -473,8 +525,17 @@
     return true;
   };
 
+  // v1.2.9: TV wording — the footer says "tap" on phones.
+  if (IS_TV) {
+    try {
+      var _hf = document.getElementById("how-installs");
+      if (_hf) _hf.innerHTML = "<strong>How installs work:</strong> press Install and the store downloads the app right here, showing the progress. Then press Install now and Android pops up the install screen. The first time, Android asks you to allow installs from the Lynxos Store — that's normal for apps outside the Play Store.";
+    } catch (e) {}
+  }
+
   loadStore();
   storeBooted = true;
+  focusRefreshOnTv();
 })();
 </script>
 </body>
