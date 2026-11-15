@@ -72,6 +72,17 @@ jobs:
 
           cp "$HTML_FILE" app/src/main/assets/www/index.html
 
+          # v1.2.9: TV (Leanback) banner so the app shows in the TV launcher row.
+          mkdir -p app/src/main/res/drawable
+          if [ -f tv_banner.png ]; then
+            cp tv_banner.png app/src/main/res/drawable/tv_banner.png
+            echo "TV banner installed."
+          else
+            echo "ERROR: tv_banner.png not found in repo root; the manifest references @drawable/tv_banner."
+            echo "Upload tv_banner.png to the repo root, then re-run this workflow."
+            exit 1
+          fi
+
           cat > settings.gradle <<'EOF'
           pluginManagement {
               repositories {
@@ -138,6 +149,12 @@ jobs:
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <!-- Lets the store restart its background update checker after a reboot. -->
               <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <!-- v1.2.9: TV declarations — a TV has no touchscreen and the
+                   Leanback feature is optional, so neither may filter the
+                   store out. (Sideload installs aren't blocked by these,
+                   but the Play Store / launcher visibility is.) -->
+              <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+              <uses-feature android:name="android.software.leanback" android:required="false" />
               <!-- Lets the store see installed apps (Android 11+). The intent-based
                    query covers every launcher app, so new Lynxos apps never need a
                    store rebuild just to be detected. -->
@@ -149,6 +166,7 @@ jobs:
               </queries>
               <application
                   android:label="Lynxos Store"
+                  android:banner="@drawable/tv_banner"
                   android:theme="@android:style/Theme.Material.Light.NoActionBar">
                   <activity
                       android:name="com.lynxos.store.MainActivity"
@@ -156,6 +174,14 @@ jobs:
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                      <!-- v1.2.9: Leanback entry — without this the Google TV
+                           launcher never lists the store, so a sideloaded
+                           store is invisible on the home screen. The phone
+                           LAUNCHER filter above is unchanged. -->
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
                       </intent-filter>
                   </activity>
                   <provider
@@ -263,7 +289,14 @@ jobs:
                                   startActivity(intent);
                                   return true;
                               }
-                          } catch (Exception ignored) {}
+                          } catch (Exception e) {
+                              /* v1.2.9: no browser on this TV — say so in the
+                                 store instead of failing silently, and keep
+                                 the page put (returning false would let the
+                                 WebView eat the navigation). */
+                              try { view.evaluateJavascript("window.__lynxosNoBrowser && window.__lynxosNoBrowser()", null); } catch (Exception ignored2) {}
+                              return true;
+                          }
                           return false;
                       }
                   });
@@ -379,14 +412,20 @@ jobs:
                               return false;
                           }
                       }
+                      /* v1.2.9: now reports whether the settings screen actually
+                         opened — the page says the manual path when it didn't
+                         instead of stranding the user after a silent failure. */
                       @JavascriptInterface
-                      public void openInstallSettings() {
+                      public boolean openInstallSettings() {
                           try {
                               Intent i = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                                       Uri.parse("package:" + getPackageName()));
                               i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                               startActivity(i);
-                          } catch (Exception ignored) {}
+                              return true;
+                          } catch (Exception e) {
+                              return false;
+                          }
                       }
                       @JavascriptInterface
                       public void installApk(final String fileName) {
