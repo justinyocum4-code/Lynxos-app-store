@@ -103,15 +103,47 @@
   body.tv .app-desc, body.tv .release-notes, body.tv .dl-text { font-size: 1.15rem; }
   body.tv :focus { outline: 3px solid var(--gold); outline-offset: 3px; }
   body.tv .release-notes summary { min-height: 52px; }
+  /* v1.3.0: TV side panel — Menu button + Updates view. The base rules
+     below keep both out of the layout entirely unless body.tv, so the
+     phone layout is untouched. The gold :focus ring above applies to
+     the panel buttons too. */
+  #tv-menu-btn, #tv-menu { display: none; }
+  body.tv #tv-menu-btn { display: inline-flex; }
+  body.tv #tv-menu {
+    display: none; position: fixed; left: 0; top: 0; bottom: 0; z-index: 60;
+    width: 300px; background: var(--panel); border-right: 3px solid var(--gold);
+    flex-direction: column; gap: .8rem; padding: 1.2rem .9rem;
+  }
+  body.tv #tv-menu.open { display: flex; }
+  body.tv #tv-menu button {
+    min-height: 60px; padding: .7rem 1rem; border-radius: 12px;
+    border: 2px solid var(--gold); background: transparent; color: var(--gold);
+    font-size: 1.25rem; font-weight: 700; text-align: left; cursor: pointer;
+  }
+  body.tv #tv-menu button.active { background: var(--gold); color: var(--ink); }
+  body.tv #tv-menu .tv-menu-count {
+    float: right; background: var(--orange); color: var(--ink);
+    border-radius: 999px; min-width: 2rem; text-align: center;
+    font-size: 1.1rem; font-weight: 800; padding: .1rem .5rem;
+  }
+  body.tv #tv-menu .tv-menu-count:empty { display: none; }
 </style>
 </head>
 <body>
 <div id="lynxos-store-app">
+  <!-- v1.3.0: TV side panel (Menu button in the header opens it). Hidden
+       on phones by the base CSS rules; TV-only. -->
+  <nav id="tv-menu" aria-label="Store menu">
+    <button type="button" data-view="all" class="active" aria-current="true">All apps</button>
+    <button type="button" data-view="updates" id="tv-menu-updates" aria-label="Updates, none available">Updates <span class="tv-menu-count" id="tv-menu-updates-count"></span></button>
+    <button type="button" data-view="check">Check for updates</button>
+  </nav>
   <header class="store-head">
     <div>
       <h1>Lynxos Store</h1>
       <p>Justin&rsquo;s apps, updates included.</p>
     </div>
+    <button class="refresh-btn" type="button" id="tv-menu-btn" aria-label="Open store menu">&#9776; Menu</button>
     <button class="refresh-btn" type="button" id="refresh-btn" aria-label="Check for app updates now">&#8635; Check</button>
   </header>
 
@@ -136,7 +168,9 @@
     if(!IS_TV){
       var _tvShort = Math.min(window.screen.width || 0, window.screen.height || 0);
       var _tvNoTouch = !("ontouchstart" in window) && (navigator.maxTouchPoints || 0) === 0;
-      if(_tvShort >= 720 && _tvNoTouch) IS_TV = true;
+      /* v1.3.0: 540, not 720 — the Onn 4K Pro reports a 540 CSS px short
+         side. No-touch + >=540 is still TV-only (phones/tablets have touch). */
+      if(_tvShort >= 540 && _tvNoTouch) IS_TV = true;
     }
   } catch(e){}
   try { if(IS_TV) document.body.classList.add("tv"); } catch(e){}
@@ -166,6 +200,11 @@
   var statusEl = document.getElementById("store-status");
   var storeBooted = false;
   var activeDownloads = {}; // fileName -> { pkg, url, name, lastQ }
+  /* v1.3.0: TV side-panel views. storeResults keeps one entry per catalog
+     app ({ app, release, error }) in arrival order, so the Updates view
+     can filter without re-fetching. */
+  var storeResults = [];
+  var storeView = "all"; // "all" | "updates" — TV side-panel view
 
   function esc(text) {
     return String(text == null ? "" : text)
@@ -275,6 +314,154 @@
     try { var b = document.getElementById("refresh-btn"); if (b) b.focus(); } catch (e) {}
   }
 
+  /* v1.3.0: TV side-panel views. isUpdateAvailable mirrors renderCard's
+     exact comparison: an installed version below the latest release with
+     a real .apk asset is an update; anything else (up to date, not
+     installed, no release, no apk) is not. */
+  function isUpdateAvailable(entry) {
+    if (!entry || entry.error || !entry.release) return false;
+    var ver = parseTag(entry.release.tag_name);
+    if (!ver) return false;
+    var assets = entry.release.assets || [];
+    var apk = null;
+    for (var i = 0; i < assets.length; i++) {
+      if (/\.apk$/i.test(assets[i].name || "")) { apk = assets[i]; break; }
+    }
+    if (!apk) return false;
+    var installed = getInstalled(entry.app.pkg);
+    return !!(installed && installed.versionCode < ver.versionCode);
+  }
+
+  /* Live count on the panel's Updates option — updates as each release
+     check lands, not only when the whole load finishes. */
+  function updateTvMenuCount() {
+    if (!IS_TV) return;
+    try {
+      var n = 0;
+      for (var i = 0; i < storeResults.length; i++) {
+        if (isUpdateAvailable(storeResults[i])) n++;
+      }
+      var c = document.getElementById("tv-menu-updates-count");
+      if (c) c.textContent = n > 0 ? String(n) : "";
+      var u = document.getElementById("tv-menu-updates");
+      if (u) u.setAttribute("aria-label", "Updates" + (n > 0 ? ", " + n + " available" : ", none available"));
+    } catch (e) {}
+  }
+
+  /* Rebuild the visible list from storeResults for the active view. Only
+     used when switching views (user-initiated): loadStore appends cards
+     incrementally instead, so a download in progress is never disturbed.
+     An in-progress download's progress bar is restored after the rebuild
+     (the watchdog and progress events live on activeDownloads, not the DOM). */
+  function renderStoreList() {
+    var focusPkg = null;
+    try {
+      var ae = document.activeElement;
+      if (ae && listEl.contains(ae)) {
+        var box = ae.closest ? ae.closest("[id^='actions-']") : null;
+        if (box && box.id) focusPkg = box.id.replace("actions-", "");
+      }
+    } catch (e) {}
+    listEl.innerHTML = "";
+    var shown = 0;
+    for (var i = 0; i < storeResults.length; i++) {
+      var entry = storeResults[i];
+      if (storeView === "updates" && !isUpdateAvailable(entry)) continue;
+      listEl.appendChild(renderCard(entry.app, entry.release, entry.error));
+      shown++;
+      var dl = null;
+      for (var f in activeDownloads) {
+        if (activeDownloads[f].pkg === entry.app.pkg) { dl = activeDownloads[f]; break; }
+      }
+      if (dl) {
+        var dbox = document.getElementById("actions-" + dl.pkg);
+        if (dbox) {
+          var pct = dl.lastPct || 0;
+          dbox.innerHTML =
+            '<div class="dl-wrap" role="group" aria-label="Downloading ' + esc(dl.name) + '">' +
+            '<div class="dl-bar-outer"><div class="dl-bar-inner" id="dlbar-' + esc(dl.pkg) + '" style="width:' + pct + '%"></div></div>' +
+            '<div class="dl-text" id="dltext-' + esc(dl.pkg) + '">Downloading&hellip; <strong>' + pct + "%</strong></div>" +
+            "</div>";
+        }
+      }
+    }
+    if (storeView === "updates" && shown === 0) {
+      var p = document.createElement("p");
+      p.id = "updates-empty";
+      p.style.color = "var(--muted)";
+      p.textContent = "All apps are up to date.";
+      listEl.appendChild(p);
+    }
+    if (focusPkg) {
+      try {
+        var nb = document.getElementById("actions-" + focusPkg);
+        var fb = nb ? nb.querySelector("button") : null;
+        if (fb) fb.focus();
+      } catch (e) {}
+    }
+    return shown;
+  }
+
+  /* Switch the list view (TV side panel). Focus lands on the first button
+     in the list, or the Menu button when the list is empty. */
+  function setStoreView(view, focusIt) {
+    storeView = view;
+    try {
+      var opts = document.querySelectorAll("#tv-menu [data-view]");
+      for (var i = 0; i < opts.length; i++) {
+        var on = opts[i].getAttribute("data-view") === view;
+        opts[i].setAttribute("aria-current", on ? "true" : "false");
+        if (on) opts[i].classList.add("active"); else opts[i].classList.remove("active");
+      }
+    } catch (e) {}
+    var shown = renderStoreList();
+    announce(view === "updates"
+      ? ("Showing updates: " + shown + " app" + (shown === 1 ? "" : "s") + ".")
+      : "Showing all apps.");
+    if (focusIt === false) return;
+    if (IS_TV) {
+      try {
+        if (shown > 0) {
+          var b = listEl.querySelector("button");
+          if (b) { b.focus(); return; }
+        }
+        var m = document.getElementById("tv-menu-btn");
+        if (m) m.focus();
+      } catch (e) {}
+    }
+  }
+
+  /* TV side panel open/close. No new keydown handlers — Back comes in
+     through window.__lynxosOnBack below. */
+  function isTvMenuOpen() {
+    try { var m = document.getElementById("tv-menu"); return !!(m && m.classList.contains("open")); } catch (e) { return false; }
+  }
+  function openTvMenu() {
+    if (!IS_TV) return;
+    try {
+      var m = document.getElementById("tv-menu");
+      if (!m) return;
+      m.classList.add("open");
+      var f = m.querySelector("[data-view]");
+      if (f) f.focus();
+    } catch (e) {}
+  }
+  function closeTvMenu(focusMenu) {
+    try {
+      var m = document.getElementById("tv-menu");
+      if (m) m.classList.remove("open");
+      if (focusMenu) {
+        var b = document.getElementById("tv-menu-btn");
+        if (b) b.focus();
+      }
+    } catch (e) {}
+  }
+  function toggleTvMenu() {
+    try {
+      if (isTvMenuOpen()) closeTvMenu(true); else openTvMenu();
+    } catch (e) {}
+  }
+
   async function loadCatalog() {
     try {
       var r = await fetch(CATALOG_URL, { cache: "no-store" });
@@ -297,6 +484,10 @@
   async function loadStore() {
     await loadCatalog();
     pushCatalogNative();
+    /* v1.3.0: a fresh load resets the retained results. Each release is
+       recorded as it lands so the Updates view can filter without
+       re-fetching, and the panel count stays live during the load. */
+    storeResults = [];
     listEl.innerHTML = "";
     if (!GITHUB_USER || GITHUB_USER.indexOf("YOUR_") === 0) {
       announce("The store is not connected yet.");
@@ -314,12 +505,40 @@
         fetch(url, { cache: "no-store", headers: { "Accept": "application/vnd.github+json" } })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (rel) {
-            listEl.appendChild(renderCard(app, rel, !rel));
+            /* v1.3.0: record first, then show. All view appends exactly
+               as before (never disturbs a download in progress). Updates
+               view appends only update-available cards — entries only
+               ever arrive during a load, so append-only is correct and
+               a download's progress UI is never rebuilt out from under it. */
+            var entry = { app: app, release: rel, error: !rel };
+            storeResults.push(entry);
+            updateTvMenuCount();
+            if (storeView === "all") {
+              listEl.appendChild(renderCard(app, rel, !rel));
+            } else if (isUpdateAvailable(entry)) {
+              var _empty = document.getElementById("updates-empty");
+              if (_empty && _empty.parentNode) _empty.parentNode.removeChild(_empty);
+              listEl.appendChild(renderCard(app, rel, !rel));
+            }
             done++;
-            if (done === STORE_APPS.length) { announce("Up to date. " + STORE_APPS.length + " apps listed."); focusRefreshOnTv(); }
+            /* v1.3.0: in Updates view the count is updates, not all apps. */
+            if (done === STORE_APPS.length) {
+              if (storeView === "updates") {
+                var _n = storeResults.filter(isUpdateAvailable).length;
+                announce("Update check finished. " + _n + " update" + (_n === 1 ? "" : "s") + " available.");
+              } else {
+                announce("Up to date. " + STORE_APPS.length + " apps listed.");
+              }
+              focusRefreshOnTv();
+            }
           })
           .catch(function () {
-            listEl.appendChild(renderCard(app, null, true));
+            var entry2 = { app: app, release: null, error: true };
+            storeResults.push(entry2);
+            updateTvMenuCount();
+            if (storeView === "all") {
+              listEl.appendChild(renderCard(app, null, true));
+            }
             done++;
             if (done === STORE_APPS.length) { announce("Finished with some connection trouble. Try Check again."); focusRefreshOnTv(); }
           });
@@ -424,6 +643,9 @@
     if (!d) return;
     armWatchdog(file);
     pct = Math.max(0, Math.min(100, pct | 0));
+    /* v1.3.0: remember the last percentage so a view-switch rebuild can
+       restore the progress bar instead of showing 0%. */
+    d.lastPct = pct;
     var bar = document.getElementById("dlbar-" + d.pkg);
     var txt = document.getElementById("dltext-" + d.pkg);
     if (bar) bar.style.width = pct + "%";
@@ -507,6 +729,22 @@
 
   document.getElementById("refresh-btn").addEventListener("click", loadStore);
 
+  /* v1.3.0: TV side panel wiring. The Menu button and panel are
+     display:none on phones, so these listeners can never fire there. */
+  document.getElementById("tv-menu-btn").addEventListener("click", toggleTvMenu);
+  document.getElementById("tv-menu").addEventListener("click", function (e) {
+    var opt = e.target.closest ? e.target.closest("[data-view]") : null;
+    if (!opt) return;
+    var view = opt.getAttribute("data-view");
+    closeTvMenu(false);
+    if (view === "check") {
+      try { var rb = document.getElementById("refresh-btn"); if (rb) rb.focus(); } catch (e2) {}
+      loadStore();
+      return;
+    }
+    setStoreView(view, true);
+  });
+
   // Called from native code when a link has nowhere to open (no browser on this TV).
   window.__lynxosNoBrowser = function () {
     announce("There's no browser on this TV to open that link.");
@@ -517,8 +755,11 @@
     try { if (storeBooted) loadStore(); } catch (e) {}
   };
 
-  // Phone back button: exit from the store home screen.
+  // Back button: v1.3.0 — when the TV side panel is open, Back closes
+  // the panel (and returns focus to the Menu button) instead of exiting.
+  // Otherwise it exits the app, as before.
   window.__lynxosOnBack = function () {
+    if (isTvMenuOpen()) { closeTvMenu(true); return true; }
     try {
       if (typeof LynxosBack !== "undefined" && LynxosBack.exitApp) LynxosBack.exitApp();
     } catch (e) {}
