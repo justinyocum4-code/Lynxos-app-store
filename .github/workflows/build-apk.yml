@@ -269,6 +269,21 @@ jobs:
                   return new File(dir, fileName);
               }
 
+              /* v1.3.3: the ONE TV detection for the whole app — leanback
+                 feature or television UI mode, which no UA string can hide.
+                 Mirrors Lynxos Music v2.2.143. */
+              static boolean isTvDevice(Context ctx) {
+                  try {
+                      if (ctx == null) return false;
+                      if (ctx.getPackageManager().hasSystemFeature("android.software.leanback")) return true;
+                      android.app.UiModeManager um = (android.app.UiModeManager)
+                              ctx.getSystemService(Context.UI_MODE_SERVICE);
+                      if (um != null && um.getCurrentModeType()
+                              == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION) return true;
+                  } catch (Throwable ignored) {}
+                  return false;
+              }
+
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
@@ -491,6 +506,13 @@ jobs:
                                   .putString(UpdateCheckReceiver.CATALOG_KEY, json)
                                   .apply();
                           } catch (Exception ignored) {}
+                      }
+
+                      /* v1.3.3: TV detection for the page — leanback /
+                         television UI mode. Mirrors Lynxos Music v2.2.143. */
+                      @JavascriptInterface
+                      public boolean isTvDevice() {
+                          try { return MainActivity.isTvDevice(MainActivity.this); } catch (Throwable ignored) { return false; }
                       }
                   }, "LynxosStore");
                   if (savedInstanceState != null) {
