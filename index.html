@@ -133,7 +133,7 @@
 <div id="lynxos-store-app">
   <!-- v1.3.0: TV side panel (Menu button in the header opens it). Hidden
        on phones by the base CSS rules; TV-only. -->
-  <nav id="tv-menu" aria-label="Store menu">
+  <nav id="tv-menu" role="dialog" aria-modal="true" aria-label="Store menu">
     <button type="button" data-view="all" class="active" aria-current="true">All apps</button>
     <button type="button" data-view="updates" id="tv-menu-updates" aria-label="Updates, none available">Updates <span class="tv-menu-count" id="tv-menu-updates-count"></span></button>
     <button type="button" data-view="check">Check for updates</button>
@@ -148,7 +148,7 @@
   </header>
 
   <div id="store-status" role="status" aria-live="polite">Starting the store&hellip;</div>
-  <div id="app-list" aria-label="Available apps"></div>
+  <div id="app-list" role="list" aria-label="Available apps"></div>
 
   <footer class="store-foot">
     <p id="how-installs"><strong>How installs work:</strong> tap Install and the store downloads the app right here, showing the progress. Then tap Install now and Android pops up the install screen. The first time, Android asks you to allow installs from the Lynxos Store &mdash; that&rsquo;s normal for apps outside the Play Store.</p>
@@ -249,6 +249,8 @@
     var badges = [];
     var actions = "";
     var notes = "";
+    /* v1.3.2: TalkBack label for the card as one list item. */
+    var stateLabel = "not published yet";
 
     if (error || !release) {
       badges.push('<span class="badge no-release">Not published yet</span>');
@@ -260,6 +262,7 @@
         if (/\.apk$/i.test(assets[i].name || "")) { apk = assets[i]; break; }
       }
       if (!ver || !apk) {
+        stateLabel = "release found, no install file yet";
         badges.push('<span class="badge no-release">Release found, no install file yet</span>');
       } else {
         var published = "";
@@ -272,6 +275,7 @@
         var installed = getInstalled(app.pkg);
         if (installed && installed.versionCode >= ver.versionCode) {
           card.classList.add("installed");
+          stateLabel = "installed, version " + installed.versionName;
           badges.push('<span class="badge is-installed">Installed: v' + esc(installed.versionName) + "</span>");
           actions =
             '<button class="store-btn secondary" type="button" data-open="' + esc(app.pkg) +
@@ -281,10 +285,12 @@
             '" aria-label="Uninstall ' + esc(app.name) + '">Uninstall</button>';
         } else if (installed) {
           card.classList.add("update-available");
+          stateLabel = "update available, version " + ver.versionName;
           badges.push('<span class="badge is-installed">Installed: v' + esc(installed.versionName) + '</span>');
           badges.push('<span class="badge needs-update">Update available: v' + esc(ver.versionName) + "</span>");
           actions = installButton(apk.browser_download_url, app, ver, "Update to");
         } else {
+          stateLabel = "not installed";
           badges.push('<span class="badge not-installed">Not installed</span>');
           actions = installButton(apk.browser_download_url, app, ver, "Install");
         }
@@ -299,6 +305,11 @@
         '<div class="app-badges">' + badges.join("") + "</div></div>" +
       "</div>" + notes +
       (actions ? '<div class="app-actions" id="actions-' + esc(app.pkg) + '">' + actions + "</div>" : "");
+    /* v1.3.2: real list semantics — TalkBack announces each app as one
+       item ("Lynxos Music, update available, version 2.2.144") instead
+       of a flat stream of heading, description, badges and buttons. */
+    card.setAttribute("role", "listitem");
+    card.setAttribute("aria-label", app.name + ", " + stateLabel);
     return card;
   }
 
@@ -311,7 +322,14 @@
      back on the Check button so a remote user never has to start over. */
   function focusRefreshOnTv() {
     if (!IS_TV) return;
-    try { var b = document.getElementById("refresh-btn"); if (b) b.focus(); } catch (e) {}
+    try {
+      /* v1.3.2: never yank focus from where the user is — under TalkBack
+         a load finishing mid-navigation stranded them at the top. Only
+         land on Check when nothing is focused yet (page boot). */
+      var ae = document.activeElement;
+      if (ae && ae !== document.body) return;
+      var b = document.getElementById("refresh-btn"); if (b) b.focus();
+    } catch (e) {}
   }
 
   /* v1.3.0: TV side-panel views. isUpdateAvailable mirrors renderCard's
@@ -432,10 +450,35 @@
   }
 
   /* TV side panel open/close. Back comes in through window.__lynxosOnBack
-     below; the left-edge ArrowLeft gesture lives with the panel wiring
-     near the bottom (v1.3.1). */
+     below; the left-edge ArrowLeft gesture is registered right after
+     these helpers (v1.3.2, moved up from the bottom wiring so a failure
+     elsewhere in the script can never silently drop it). */
   function isTvMenuOpen() {
     try { var m = document.getElementById("tv-menu"); return !!(m && m.classList.contains("open")); } catch (e) { return false; }
+  }
+  /* v1.3.2: TalkBack dialog behavior. While the panel is open the rest
+     of the page is inert, so TalkBack's linear navigation cannot wander
+     out of the panel into the list behind it. #store-status is
+     deliberately NOT inert: it is the live region that announces the
+     open/close, and it has no focusable children, so it can never be a
+     TalkBack stop behind the panel. `inert` is supported in
+     Chrome/WebView 102+ (the Onn box's WebView is far newer); the
+     aria-hidden fallback covers anything older. */
+  function setTvMenuInert(on) {
+    var parts = [];
+    try {
+      var _h = document.querySelector(".store-head"); if (_h) parts.push(_h);
+      var _f = document.querySelector(".store-foot"); if (_f) parts.push(_f);
+      if (listEl) parts.push(listEl);
+      for (var i = 0; i < parts.length; i++) {
+        var el = parts[i];
+        try {
+          if (typeof el.inert !== "undefined") { el.inert = on; }
+          else if (on) { el.setAttribute("aria-hidden", "true"); }
+          else { el.removeAttribute("aria-hidden"); }
+        } catch (e2) {}
+      }
+    } catch (e) {}
   }
   function openTvMenu() {
     if (!IS_TV) return;
@@ -443,14 +486,18 @@
       var m = document.getElementById("tv-menu");
       if (!m) return;
       m.classList.add("open");
+      setTvMenuInert(true);
       var f = m.querySelector("[data-view]");
       if (f) f.focus();
+      announce("Store menu open.");
     } catch (e) {}
   }
   function closeTvMenu(focusMenu) {
     try {
       var m = document.getElementById("tv-menu");
       if (m) m.classList.remove("open");
+      setTvMenuInert(false);
+      announce("Store menu closed.");
       if (focusMenu) {
         var b = document.getElementById("tv-menu-btn");
         if (b) b.focus();
@@ -462,6 +509,97 @@
       if (isTvMenuOpen()) closeTvMenu(true); else openTvMenu();
     } catch (e) {}
   }
+
+  /* v1.3.2: TV left-edge gesture — Left opens the side panel when focus
+     can't move any further left, mirroring the music app's "move first,
+     menu is the fallback" rule. The store has no custom D-pad engine, so
+     the WebView's own spatial navigation runs first. Hardened after
+     v1.3.1 never fired on the Onn box (1.3.1 IS installed there): this
+     box's spatial navigation moves focus on almost every Left press
+     (up/down drift to the nearest card even when nothing sits truly to
+     the left), so "focus didn't move" was never true. Two synchronous
+     paths now cover it: (a) Left while focus is on the Menu button
+     itself opens at once — it is the leftmost focusable control in the
+     header row, so Left from it has nowhere to go. (b) Left while focus
+     is on a control already at the content column's left edge (within
+     ~48px of the list's left edge — card action buttons sit at
+     list-left + card padding, ~22px on TV; a screen-x test would never
+     fire here because the column is centered with max-width 860px) also
+     opens at once. Anything else keeps the 80ms move-test: record the
+     focused element on keydown, then open only if focus did not move.
+     No preventDefault on the move-test path, so the spatial move still
+     happens and the test is meaningful. Left while the panel is open
+     closes it (focus back on the Menu button), mirroring Back — that
+     path DOES preventDefault, so the press doesn't also move focus
+     underneath. Key repeats are safe: every delayed check re-tests
+     isTvMenuOpen() before opening, so holding Left can open the panel
+     at most once. Phones never reach this: the IS_TV gate returns
+     first. Registered here, right after the panel helpers, and wrapped
+     so a failure elsewhere in the script can never silently drop it. */
+  try {
+    document.addEventListener("keydown", function (e) {
+      try {
+        if (!IS_TV) return;
+        if (!e || e.key !== "ArrowLeft") return;
+        var ae = document.activeElement;
+        var tag = (ae && ae.tagName) ? ae.tagName.toLowerCase() : "";
+        if (tag === "input" || tag === "textarea" || tag === "select") return;
+        if (isTvMenuOpen()) {
+          e.preventDefault();
+          closeTvMenu(true);
+          return;
+        }
+        /* (a) Menu button: leftmost header control, nowhere to go. */
+        if (ae && ae.id === "tv-menu-btn") {
+          e.preventDefault();
+          openTvMenu();
+          return;
+        }
+        /* (b) Already at the content column's left edge: card action
+           buttons and release-notes summaries sit at list-left + card
+           padding. No true leftward move exists from here; spatial
+           nav would only drift up/down the list. */
+        try {
+          var _lr = listEl ? listEl.getBoundingClientRect() : null;
+          var _r = (ae && ae.getBoundingClientRect) ? ae.getBoundingClientRect() : null;
+          if (_lr && _r && _r.left <= _lr.left + 48) {
+            e.preventDefault();
+            openTvMenu();
+            return;
+          }
+        } catch (e2) {}
+        var before = ae;
+        setTimeout(function () {
+          try {
+            if (isTvMenuOpen()) return;
+            if (document.activeElement !== before) return;
+            openTvMenu();
+          } catch (err) {}
+        }, 80);
+      } catch (err) {}
+    });
+  } catch (err2) {}
+
+  /* v1.3.2: TalkBack scrolling — when focus lands on an app-list or
+     panel control, scroll it into view instantly (never smooth: a
+     smooth scroll fights TalkBack's own scrolling). TV-only; the
+     handler returns immediately on phones. It only fires for elements
+     inside #app-list or #tv-menu, so header focus moves (panel open /
+     close, Check) are untouched. */
+  try {
+    document.addEventListener("focusin", function (e) {
+      try {
+        if (!IS_TV) return;
+        var t = e && e.target ? e.target : null;
+        if (!t || !t.scrollIntoView) return;
+        var inList = listEl && listEl.contains(t);
+        var m = document.getElementById("tv-menu");
+        var inMenu = m && m.contains(t);
+        if (!inList && !inMenu) return;
+        t.scrollIntoView({ block: "nearest" });
+      } catch (err) {}
+    });
+  } catch (err2) {}
 
   async function loadCatalog() {
     try {
@@ -744,41 +882,6 @@
       return;
     }
     setStoreView(view, true);
-  });
-
-  /* v1.3.1: TV left-edge gesture — Left opens the side panel when focus
-     can't move any further left, mirroring the music app's "move first,
-     menu is the fallback" rule. The store has no custom D-pad engine, so
-     the WebView's own spatial navigation runs first: record the focused
-     element on keydown, then check ~80ms later whether focus moved. No
-     preventDefault on the open path, so the spatial move still happens
-     and the test is meaningful. Left while the panel is open closes it
-     (focus back on the Menu button), mirroring Back — that path DOES
-     preventDefault, so the press doesn't also move focus underneath.
-     Key repeats are safe: every delayed check re-tests isTvMenuOpen()
-     before opening, so holding Left can open the panel at most once.
-     Phones never reach this: the IS_TV gate returns first. */
-  document.addEventListener("keydown", function (e) {
-    try {
-      if (!IS_TV) return;
-      if (!e || e.key !== "ArrowLeft") return;
-      var ae = document.activeElement;
-      var tag = (ae && ae.tagName) ? ae.tagName.toLowerCase() : "";
-      if (tag === "input" || tag === "textarea" || tag === "select") return;
-      if (isTvMenuOpen()) {
-        e.preventDefault();
-        closeTvMenu(true);
-        return;
-      }
-      var before = ae;
-      setTimeout(function () {
-        try {
-          if (isTvMenuOpen()) return;
-          if (document.activeElement !== before) return;
-          openTvMenu();
-        } catch (err) {}
-      }, 80);
-    } catch (err) {}
   });
 
   // Called from native code when a link has nowhere to open (no browser on this TV).
