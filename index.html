@@ -431,8 +431,9 @@
     }
   }
 
-  /* TV side panel open/close. No new keydown handlers — Back comes in
-     through window.__lynxosOnBack below. */
+  /* TV side panel open/close. Back comes in through window.__lynxosOnBack
+     below; the left-edge ArrowLeft gesture lives with the panel wiring
+     near the bottom (v1.3.1). */
   function isTvMenuOpen() {
     try { var m = document.getElementById("tv-menu"); return !!(m && m.classList.contains("open")); } catch (e) { return false; }
   }
@@ -743,6 +744,41 @@
       return;
     }
     setStoreView(view, true);
+  });
+
+  /* v1.3.1: TV left-edge gesture — Left opens the side panel when focus
+     can't move any further left, mirroring the music app's "move first,
+     menu is the fallback" rule. The store has no custom D-pad engine, so
+     the WebView's own spatial navigation runs first: record the focused
+     element on keydown, then check ~80ms later whether focus moved. No
+     preventDefault on the open path, so the spatial move still happens
+     and the test is meaningful. Left while the panel is open closes it
+     (focus back on the Menu button), mirroring Back — that path DOES
+     preventDefault, so the press doesn't also move focus underneath.
+     Key repeats are safe: every delayed check re-tests isTvMenuOpen()
+     before opening, so holding Left can open the panel at most once.
+     Phones never reach this: the IS_TV gate returns first. */
+  document.addEventListener("keydown", function (e) {
+    try {
+      if (!IS_TV) return;
+      if (!e || e.key !== "ArrowLeft") return;
+      var ae = document.activeElement;
+      var tag = (ae && ae.tagName) ? ae.tagName.toLowerCase() : "";
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+      if (isTvMenuOpen()) {
+        e.preventDefault();
+        closeTvMenu(true);
+        return;
+      }
+      var before = ae;
+      setTimeout(function () {
+        try {
+          if (isTvMenuOpen()) return;
+          if (document.activeElement !== before) return;
+          openTvMenu();
+        } catch (err) {}
+      }, 80);
+    } catch (err) {}
   });
 
   // Called from native code when a link has nowhere to open (no browser on this TV).
