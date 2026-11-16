@@ -139,11 +139,11 @@
     <button type="button" data-view="check">Check for updates</button>
   </nav>
   <header class="store-head">
+    <button class="refresh-btn" type="button" id="tv-menu-btn" aria-label="Open store menu">&#9776; Menu</button>
     <div>
       <h1>Lynxos Store</h1>
       <p>Justin&rsquo;s apps, updates included.</p>
     </div>
-    <button class="refresh-btn" type="button" id="tv-menu-btn" aria-label="Open store menu">&#9776; Menu</button>
     <button class="refresh-btn" type="button" id="refresh-btn" aria-label="Check for app updates now">&#8635; Check</button>
   </header>
 
@@ -172,6 +172,12 @@
          side. No-touch + >=540 is still TV-only (phones/tablets have touch). */
       if(_tvShort >= 540 && _tvNoTouch) IS_TV = true;
     }
+  } catch(e){}
+  /* v1.3.3: ask the native side too — leanback / television UI mode, which
+     no UA string can hide. Guarded: older installs without the bridge
+     method simply stay with the heuristics above. */
+  try {
+    if(!IS_TV && typeof LynxosStore !== "undefined" && LynxosStore && typeof LynxosStore.isTvDevice === "function" && LynxosStore.isTvDevice()) IS_TV = true;
   } catch(e){}
   try { if(IS_TV) document.body.classList.add("tv"); } catch(e){}
 
