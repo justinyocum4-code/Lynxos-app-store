@@ -82,5 +82,13 @@
   "name": "Lynxo Language Learning",
   "pkg": "com.lynxolanguage.app",
   "repo": "Lynxo-Language"
+ },
+ {
+  "desc": "Original turn-based RPG. Explore Aldermere village, gather your party, and face the Ember Wolf. Party, turn-based battles, spoken narration.",
+  "icon": "⚔️",
+  "name": "Vaeloria",
+  "pkg": "com.lynxosrpg.app",
+  "repo": "Vaeloria",
+  "category": "game"
  }
 ]
