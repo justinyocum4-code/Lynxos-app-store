@@ -37,6 +37,14 @@
     font-size: 1rem; font-weight: 700;
   }
   .refresh-btn:active { background: var(--gold); color: var(--ink); }
+  /* v1.3.4: Apps / Games tabs — categorized tabbed layout. */
+  .store-tabs { display: flex; gap: .6rem; margin-bottom: 1rem; }
+  .store-tab {
+    flex: 1; min-height: 52px; padding: .6rem 1rem; border-radius: 12px;
+    border: 2px solid var(--gold); background: transparent; color: var(--gold);
+    font-size: 1.05rem; font-weight: 800; cursor: pointer;
+  }
+  .store-tab[aria-selected="true"] { background: var(--gold); color: var(--ink); }
   #store-status {
     background: var(--panel); border: 1px solid #333; border-radius: 10px;
     padding: .7rem .9rem; margin-bottom: 1rem; color: var(--muted); font-size: .95rem;
@@ -98,6 +106,7 @@
   body.tv #lynxos-store-app { max-width: 860px; }
   body.tv header.store-head h1 { font-size: 2.1rem; }
   body.tv .refresh-btn { min-height: 60px; font-size: 1.2rem; }
+  body.tv .store-tab { min-height: 60px; font-size: 1.25rem; }
   body.tv .store-btn { min-height: 60px; font-size: 1.25rem; }
   body.tv .app-name { font-size: 1.5rem; }
   body.tv .app-desc, body.tv .release-notes, body.tv .dl-text { font-size: 1.15rem; }
@@ -134,7 +143,8 @@
   <!-- v1.3.0: TV side panel (Menu button in the header opens it). Hidden
        on phones by the base CSS rules; TV-only. -->
   <nav id="tv-menu" role="dialog" aria-modal="true" aria-label="Store menu">
-    <button type="button" data-view="all" class="active" aria-current="true">All apps</button>
+    <button type="button" data-view="all" class="active" aria-current="true">Apps</button>
+    <button type="button" data-view="games">Games</button>
     <button type="button" data-view="updates" id="tv-menu-updates" aria-label="Updates, none available">Updates <span class="tv-menu-count" id="tv-menu-updates-count"></span></button>
     <button type="button" data-view="check">Check for updates</button>
   </nav>
@@ -146,6 +156,13 @@
     </div>
     <button class="refresh-btn" type="button" id="refresh-btn" aria-label="Check for app updates now">&#8635; Check</button>
   </header>
+
+  <!-- v1.3.4: Apps / Games tabs. Tap or D-pad arrows to switch; the
+       switch is announced through the #store-status live region. -->
+  <div class="store-tabs" role="tablist" aria-label="Store categories">
+    <button type="button" class="store-tab active" id="tab-apps" role="tab" aria-selected="true" aria-controls="app-list" data-tab="apps">Apps</button>
+    <button type="button" class="store-tab" id="tab-games" role="tab" aria-selected="false" aria-controls="app-list" data-tab="games">Games</button>
+  </div>
 
   <div id="store-status" role="status" aria-live="polite">Starting the store&hellip;</div>
   <div id="app-list" role="list" aria-label="Available apps"></div>
@@ -198,7 +215,12 @@
     { name: "Kids Shows", repo: "Kids-Shows-app", pkg: "com.kidsshows.app", icon: "\u{1F4FA}", desc: "Kids shows streaming 24/7 plus classic public-domain cartoons. Everything plays inside the app." },
     { name: "Movies", repo: "Movie-app", pkg: "com.movieapp.app", icon: "\u{1F3AC}", desc: "Browse thousands of free legal movies with posters, details, trailers and in-app playback. Log into your Premiumize account to play your cloud files." },
     { name: "Lynxos Music", repo: "Lynxos-Music", pkg: "com.lynxosmusic.app", icon: "\u{1F3B5}", desc: "YouTube-powered music player with search, playlists, liked songs, and listening history." },
-    { name: "Lynxo Language Learning", repo: "Lynxo-Language", pkg: "com.lynxolanguage.app", icon: "\u{1F5E3}\uFE0F", desc: "Learn languages by ear: Duolingo-style spoken lessons in 18 languages, with XP, streaks and progress saved to your account." }
+    { name: "Lynxo Language Learning", repo: "Lynxo-Language", pkg: "com.lynxolanguage.app", icon: "\u{1F5E3}\uFE0F", desc: "Learn languages by ear: Duolingo-style spoken lessons in 18 languages, with XP, streaks and progress saved to your account." },
+    /* v1.3.4: first game in the store. category "game" puts it on the
+       Games tab; apps without a category stay on the Apps tab. The
+       install/update flow reads the Vaeloria repo's latest release
+       (v1.0.1+2), so no version or URL is baked in here. */
+    { name: "Vaeloria", repo: "Vaeloria", pkg: "com.lynxosrpg.app", icon: "\u2694\uFE0F", desc: "Original turn-based RPG. Explore Aldermere village, gather your party, and face the Ember Wolf. Party, turn-based battles, spoken narration.", category: "game" }
   ];
   // Release tags must look like: v5.9+24  (version name + version code)
 
@@ -211,6 +233,7 @@
      can filter without re-fetching. */
   var storeResults = [];
   var storeView = "all"; // "all" | "updates" — TV side-panel view
+  var storeTab = "apps"; // "apps" | "games" — v1.3.4 main tabs
 
   function esc(text) {
     return String(text == null ? "" : text)
@@ -372,6 +395,26 @@
     } catch (e) {}
   }
 
+  /* v1.3.4: tab filtering. An entry is a game only when its catalog
+     entry says category "game"; everything else is an app. The Updates
+     view ignores the tab and shows every update available, matching the
+     panel's live count. */
+  function entryMatchesTab(entry) {
+    var isGame = !!(entry && entry.app && entry.app.category === "game");
+    return storeTab === "games" ? isGame : !isGame;
+  }
+  function isEntryVisible(entry) {
+    if (storeView === "updates") return isUpdateAvailable(entry);
+    return entryMatchesTab(entry);
+  }
+  function countVisible() {
+    var n = 0;
+    for (var i = 0; i < storeResults.length; i++) {
+      if (isEntryVisible(storeResults[i])) n++;
+    }
+    return n;
+  }
+
   /* Rebuild the visible list from storeResults for the active view. Only
      used when switching views (user-initiated): loadStore appends cards
      incrementally instead, so a download in progress is never disturbed.
@@ -390,7 +433,7 @@
     var shown = 0;
     for (var i = 0; i < storeResults.length; i++) {
       var entry = storeResults[i];
-      if (storeView === "updates" && !isUpdateAvailable(entry)) continue;
+      if (!isEntryVisible(entry)) continue;
       listEl.appendChild(renderCard(entry.app, entry.release, entry.error));
       shown++;
       var dl = null;
@@ -409,11 +452,13 @@
         }
       }
     }
-    if (storeView === "updates" && shown === 0) {
+    if (shown === 0) {
       var p = document.createElement("p");
-      p.id = "updates-empty";
+      p.id = "list-empty";
       p.style.color = "var(--muted)";
-      p.textContent = "All apps are up to date.";
+      p.textContent = storeView === "updates"
+        ? "All apps are up to date."
+        : (storeTab === "games" ? "No games yet. Check back soon." : "No apps listed yet.");
       listEl.appendChild(p);
     }
     if (focusPkg) {
@@ -426,22 +471,71 @@
     return shown;
   }
 
-  /* Switch the list view (TV side panel). Focus lands on the first button
-     in the list, or the Menu button when the list is empty. */
-  function setStoreView(view, focusIt) {
-    storeView = view;
+  /* v1.3.4: keep the TV panel's active option in sync with the tab and
+     the view. "Apps" is active on the Apps tab in the all view, "Games"
+     on the Games tab in the all view, "Updates" in the updates view;
+     "Check for updates" is never marked active. */
+  function syncTvMenuActive() {
     try {
       var opts = document.querySelectorAll("#tv-menu [data-view]");
       for (var i = 0; i < opts.length; i++) {
-        var on = opts[i].getAttribute("data-view") === view;
+        var v = opts[i].getAttribute("data-view");
+        var on = (v === "updates" && storeView === "updates") ||
+          (v === "all" && storeView !== "updates" && storeTab === "apps") ||
+          (v === "games" && storeView !== "updates" && storeTab === "games");
         opts[i].setAttribute("aria-current", on ? "true" : "false");
         if (on) opts[i].classList.add("active"); else opts[i].classList.remove("active");
       }
     } catch (e) {}
+  }
+
+  /* Keep the main Apps / Games tab buttons in sync with the tab state. */
+  function syncTabButtons() {
+    try {
+      var tabs = document.querySelectorAll(".store-tab[data-tab]");
+      for (var i = 0; i < tabs.length; i++) {
+        var on = tabs[i].getAttribute("data-tab") === storeTab;
+        tabs[i].setAttribute("aria-selected", on ? "true" : "false");
+        if (on) tabs[i].classList.add("active"); else tabs[i].classList.remove("active");
+      }
+    } catch (e) {}
+  }
+
+  /* Switch the list view (TV side panel). Focus lands on the first button
+     in the list, or the Menu button when the list is empty. */
+  function setStoreView(view, focusIt) {
+    storeView = view;
+    syncTvMenuActive();
+    syncTabButtons();
     var shown = renderStoreList();
     announce(view === "updates"
       ? ("Showing updates: " + shown + " app" + (shown === 1 ? "" : "s") + ".")
-      : "Showing all apps.");
+      : ("Showing " + (storeTab === "games" ? "games" : "apps") + ": " + shown + " " +
+          (storeTab === "games" ? "game" : "app") + (shown === 1 ? "" : "s") + "."));
+    if (focusIt === false) return;
+    if (IS_TV) {
+      try {
+        if (shown > 0) {
+          var b = listEl.querySelector("button");
+          if (b) { b.focus(); return; }
+        }
+        var m = document.getElementById("tv-menu-btn");
+        if (m) m.focus();
+      } catch (e) {}
+    }
+  }
+
+  /* v1.3.4: switch the main Apps / Games tab. Selecting a tab leaves
+     the updates filter (a tab shows its whole category) and announces
+     the switch through the live region. */
+  function setStoreTab(tab, focusIt) {
+    storeTab = tab;
+    storeView = "all";
+    syncTvMenuActive();
+    syncTabButtons();
+    var shown = renderStoreList();
+    announce("Showing " + (tab === "games" ? "games" : "apps") + ": " + shown + " " +
+      (tab === "games" ? "game" : "app") + (shown === 1 ? "" : "s") + ".");
     if (focusIt === false) return;
     if (IS_TV) {
       try {
@@ -475,6 +569,8 @@
     try {
       var _h = document.querySelector(".store-head"); if (_h) parts.push(_h);
       var _f = document.querySelector(".store-foot"); if (_f) parts.push(_f);
+      /* v1.3.4: the Apps / Games tab bar is also behind the panel. */
+      var _t = document.querySelector(".store-tabs"); if (_t) parts.push(_t);
       if (listEl) parts.push(listEl);
       for (var i = 0; i < parts.length; i++) {
         var el = parts[i];
@@ -658,10 +754,8 @@
             var entry = { app: app, release: rel, error: !rel };
             storeResults.push(entry);
             updateTvMenuCount();
-            if (storeView === "all") {
-              listEl.appendChild(renderCard(app, rel, !rel));
-            } else if (isUpdateAvailable(entry)) {
-              var _empty = document.getElementById("updates-empty");
+            if (isEntryVisible(entry)) {
+              var _empty = document.getElementById("list-empty");
               if (_empty && _empty.parentNode) _empty.parentNode.removeChild(_empty);
               listEl.appendChild(renderCard(app, rel, !rel));
             }
@@ -672,7 +766,10 @@
                 var _n = storeResults.filter(isUpdateAvailable).length;
                 announce("Update check finished. " + _n + " update" + (_n === 1 ? "" : "s") + " available.");
               } else {
-                announce("Up to date. " + STORE_APPS.length + " apps listed.");
+                /* v1.3.4: count what the current tab actually shows. */
+                var _shown = countVisible();
+                announce("Up to date. " + _shown + " " +
+                  (storeTab === "games" ? "game" : "app") + (_shown === 1 ? "" : "s") + " listed.");
               }
               focusRefreshOnTv();
             }
@@ -681,7 +778,9 @@
             var entry2 = { app: app, release: null, error: true };
             storeResults.push(entry2);
             updateTvMenuCount();
-            if (storeView === "all") {
+            if (isEntryVisible(entry2)) {
+              var _empty2 = document.getElementById("list-empty");
+              if (_empty2 && _empty2.parentNode) _empty2.parentNode.removeChild(_empty2);
               listEl.appendChild(renderCard(app, null, true));
             }
             done++;
@@ -887,8 +986,35 @@
       loadStore();
       return;
     }
+    /* v1.3.4: Apps / Games open their tab; Updates opens the updates view. */
+    if (view === "all") { setStoreTab("apps", true); return; }
+    if (view === "games") { setStoreTab("games", true); return; }
     setStoreView(view, true);
   });
+
+  /* v1.3.4: main Apps / Games tabs. Tap (or Enter/Space) selects; Left /
+     Right arrows move to the other tab and select it, so a D-pad user
+     never has to tab through the whole list to switch categories. */
+  (function () {
+    var tabs = document.querySelectorAll(".store-tab[data-tab]");
+    function tabKey(e) {
+      if (!e || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+      var cur = e.currentTarget.getAttribute("data-tab");
+      var next = cur === "apps" ? "games" : "apps";
+      e.preventDefault();
+      setStoreTab(next, false);
+      try {
+        var nb = document.getElementById("tab-" + next);
+        if (nb) nb.focus();
+      } catch (e2) {}
+    }
+    for (var i = 0; i < tabs.length; i++) {
+      tabs[i].addEventListener("click", function () {
+        setStoreTab(this.getAttribute("data-tab"), false);
+      });
+      tabs[i].addEventListener("keydown", tabKey);
+    }
+  })();
 
   // Called from native code when a link has nowhere to open (no browser on this TV).
   window.__lynxosNoBrowser = function () {
