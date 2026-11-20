@@ -98,5 +98,13 @@
   "pkg": "com.lynxosbowling.app",
   "repo": "Lynxos-Bowling-Unity",
   "category": "game"
- }
+ },
+   {
+        "desc": "Classic game emulators on your tablet and TV: NES, SNES, Game Boy, Genesis and more, with free games included and a login that syncs your library.",
+        "icon": "🕹️",
+        "name": "Lynxos Retro",
+        "pkg": "com.lynxosretro.app",
+        "repo": "Lynxos-Retro",
+        "category": "game"
+   }
 ]
